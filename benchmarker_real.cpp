@@ -379,6 +379,126 @@ int main() {
             "        args:\n"
             "          api: posts\n"
             "          payload: '{\"title\":\"Hello World\",\"author\":\"Alice\"}'\n"
+        },
+        // Scenario 6: Authenticated Code Reader
+        {
+            "Authenticated Code Reader",
+            // LLM-TOP
+            "VER:LLM-TOPv1 CHK:sha256:1111 AGT:reader UID:anon TIM:2026-07-18 REQID:req1 FALLBACK:json\n"
+            "[READER] tgt:../LLM_Mock/auth_spec.txt:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789 act:analyze GL:summarize_requirements\n"
+            "!read[path=../LLM_Mock/auth_spec.txt;cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789]\n",
+            // Verbose JSON
+            "{\n"
+            "  \"version\": \"LLM-TOPv1\",\n"
+            "  \"checksum\": \"sha256:1111\",\n"
+            "  \"agent\": \"reader\",\n"
+            "  \"uid\": \"anon\",\n"
+            "  \"time\": \"2026-07-18\",\n"
+            "  \"reqid\": \"req1\",\n"
+            "  \"fallback\": \"json\",\n"
+            "  \"statements\": [\n"
+            "    {\n"
+            "      \"role\": \"READER\",\n"
+            "      \"kvpairs\": {\n"
+            "        \"tgt\": \"../LLM_Mock/auth_spec.txt:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\",\n"
+            "        \"act\": \"analyze\",\n"
+            "        \"GL\": \"summarize_requirements\"\n"
+            "      },\n"
+            "      \"commands\": [\n"
+            "        {\n"
+            "          \"tool\": \"read\",\n"
+            "          \"args\": {\n"
+            "            \"path\": \"../LLM_Mock/auth_spec.txt\",\n"
+            "            \"cap\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\"\n"
+            "          }\n"
+            "        }\n"
+            "      ]\n"
+            "    }\n"
+            "  ]\n"
+            "}",
+            // Minimal JSON
+            "{\"v\":\"LLM-TOPv1\",\"c\":\"sha256:1111\",\"a\":\"reader\",\"u\":\"anon\",\"t\":\"2026-07-18\",\"r\":\"req1\",\"f\":\"json\",\"s\":[{\"o\":\"READER\",\"k\":{\"t\":\"../LLM_Mock/auth_spec.txt:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\",\"a\":\"analyze\",\"G\":\"summarize_requirements\"},\"c\":[{\"t\":\"read\",\"a\":{\"p\":\"../LLM_Mock/auth_spec.txt\",\"c\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\"}}]}]}",
+            // Compact JSON
+            "{\"version\":\"LLM-TOPv1\",\"checksum\":\"sha256:1111\",\"agent\":\"reader\",\"uid\":\"anon\",\"time\":\"2026-07-18\",\"reqid\":\"req1\",\"fallback\":\"json\",\"statements\":[{\"role\":\"READER\",\"kvpairs\":{\"tgt\":\"../LLM_Mock/auth_spec.txt:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\",\"act\":\"analyze\",\"GL\":\"summarize_requirements\"},\"commands\":[{\"tool\":\"read\",\"args\":{\"path\":\"../LLM_Mock/auth_spec.txt\",\"cap\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\"}}]}]}",
+            // YAML
+            "version: LLM-TOPv1\n"
+            "checksum: sha256:1111\n"
+            "agent: reader\n"
+            "uid: anon\n"
+            "time: 2026-07-18\n"
+            "reqid: req1\n"
+            "fallback: json\n"
+            "statements:\n"
+            "  - role: READER\n"
+            "    kvpairs:\n"
+            "      tgt: ../LLM_Mock/auth_spec.txt:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\n"
+            "      act: analyze\n"
+            "      GL: summarize_requirements\n"
+            "    commands:\n"
+            "      - tool: read\n"
+            "        args:\n"
+            "          path: ../LLM_Mock/auth_spec.txt\n"
+            "          cap: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\n"
+        },
+        // Scenario 7: Pathfinding Executor
+        {
+            "Pathfinding Executor",
+            // LLM-TOP
+            "VER:LLM-TOPv1 CHK:sha256:2222 AGT:coder UID:anon TIM:2026-07-18 REQID:req2 FALLBACK:json\n"
+            "[EXEC] tgt:../LLM_Mock/astar.cpp:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789 act:execute GL:run_astar\n"
+            "!run[target=../LLM_Mock/astar.cpp;cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789]\n",
+            // Verbose JSON
+            "{\n"
+            "  \"version\": \"LLM-TOPv1\",\n"
+            "  \"checksum\": \"sha256:2222\",\n"
+            "  \"agent\": \"coder\",\n"
+            "  \"uid\": \"anon\",\n"
+            "  \"time\": \"2026-07-18\",\n"
+            "  \"reqid\": \"req2\",\n"
+            "  \"fallback\": \"json\",\n"
+            "  \"statements\": [\n"
+            "    {\n"
+            "      \"role\": \"EXEC\",\n"
+            "      \"kvpairs\": {\n"
+            "        \"tgt\": \"../LLM_Mock/astar.cpp:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\",\n"
+            "        \"act\": \"execute\",\n"
+            "        \"GL\": \"run_astar\"\n"
+            "      },\n"
+            "      \"commands\": [\n"
+            "        {\n"
+            "          \"tool\": \"run\",\n"
+            "          \"args\": {\n"
+            "            \"target\": \"../LLM_Mock/astar.cpp\",\n"
+            "            \"cap\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\"\n"
+            "          }\n"
+            "        }\n"
+            "      ]\n"
+            "    }\n"
+            "  ]\n"
+            "}",
+            // Minimal JSON
+            "{\"v\":\"LLM-TOPv1\",\"c\":\"sha256:2222\",\"a\":\"coder\",\"u\":\"anon\",\"t\":\"2026-07-18\",\"r\":\"req2\",\"f\":\"json\",\"s\":[{\"o\":\"EXEC\",\"k\":{\"t\":\"../LLM_Mock/astar.cpp:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\",\"a\":\"execute\",\"G\":\"run_astar\"},\"c\":[{\"t\":\"run\",\"a\":{\"t\":\"../LLM_Mock/astar.cpp\",\"c\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\"}}]}]}",
+            // Compact JSON
+            "{\"version\":\"LLM-TOPv1\",\"checksum\":\"sha256:2222\",\"agent\":\"coder\",\"uid\":\"anon\",\"time\":\"2026-07-18\",\"reqid\":\"req2\",\"fallback\":\"json\",\"statements\":[{\"role\":\"EXEC\",\"kvpairs\":{\"tgt\":\"../LLM_Mock/astar.cpp:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\",\"act\":\"execute\",\"GL\":\"run_astar\"},\"commands\":[{\"tool\":\"run\",\"args\":{\"target\":\"../LLM_Mock/astar.cpp\",\"cap\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\"}}]}]}",
+            // YAML
+            "version: LLM-TOPv1\n"
+            "checksum: sha256:2222\n"
+            "agent: coder\n"
+            "uid: anon\n"
+            "time: 2026-07-18\n"
+            "reqid: req2\n"
+            "fallback: json\n"
+            "statements:\n"
+            "  - role: EXEC\n"
+            "    kvpairs:\n"
+            "      tgt: ../LLM_Mock/astar.cpp:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\n"
+            "      act: execute\n"
+            "      GL: run_astar\n"
+            "    commands:\n"
+            "      - tool: run\n"
+            "        args:\n"
+            "          target: ../LLM_Mock/astar.cpp\n"
+            "          cap: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\n"
         }
     };
 
@@ -426,7 +546,7 @@ int main() {
 
     auto get_median_and_range = [](std::vector<float> savings) -> std::string {
         std::sort(savings.begin(), savings.end());
-        float median = savings[2];
+        float median = savings[savings.size() / 2];
         float min_val = savings.front();
         float max_val = savings.back();
         std::stringstream ss;

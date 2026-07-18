@@ -160,12 +160,14 @@ We evaluated the token savings of LLM-TOP compared to Verbose JSON, Compact JSON
 | **Debugging Session** | 102 | 235 (56%) | 223 (54%) | 235 (56%) | 116 (12%) |
 | **Long-context Read** | 78 | 183 (57%) | 174 (55%) | 183 (57%) | 94 (17%) |
 | **Synthetic Large Message** | 184 | 329 (44%) | 317 (41%) | 329 (44%) | 177 (-4%) |
+| **Authenticated Code Reader** | 149 | 253 (41%) | 244 (38%) | 253 (41%) | 164 (9%) |
+| **Pathfinding Executor** | 146 | 250 (41%) | 240 (39%) | 250 (41%) | 161 (9%) |
 
 ### Summary of Savings (Token Reduction by using LLM-TOP):
-- **vs. Verbose JSON:** **55.0%** median reduction (range: 44.1% to 57.4%)
-- **vs. Compact JSON:** **55.0%** median reduction (range: 44.1% to 57.4%)
-- **vs. Minimal JSON:** **52.8%** median reduction (range: 42.0% to 55.2%)
-- **vs. YAML:** **12.1%** median reduction (range: -4.0% to 17.0%)
+- **vs. Verbose JSON:** **53.3%** median reduction (range: 41.1% to 57.4%)
+- **vs. Compact JSON:** **53.3%** median reduction (range: 41.1% to 57.4%)
+- **vs. Minimal JSON:** **51.6%** median reduction (range: 38.9% to 55.2%)
+- **vs. YAML:** **10.3%** median reduction (range: -4.0% to 17.0%)
 
 ---
 

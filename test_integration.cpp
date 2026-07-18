@@ -1,0 +1,92 @@
+#include "parser_v2.hpp"
+#include "middleware.hpp"
+#include "schema_validator.hpp"
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <memory>
+#include <cassert>
+
+const std::string TEST_SECRET = "llm-top-test-secret-key-2026";
+
+void run_scenario_1_auth_reader() {
+    std::cout << "\n[INTEGRATION TEST 1] Authenticated Code Reader Scenario...\n";
+
+    auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
+    // Create token for agent "reader" with read capability on "auth_spec.txt"
+    std::string cap = validator->create_token("reader", "execute:read", 9999999999LL);
+
+    // Payload using relative path to auth_spec.txt
+    std::string payload = 
+        "VER:LLM-TOPv1 CHK:sha256:1111 AGT:reader UID:anon TIM:2026-07-18 REQID:req1 FALLBACK:json\n"
+        "[READER] tgt:../LLM_Mock/auth_spec.txt:cap=" + cap + " act:analyze GL:summarize_requirements\n"
+        "!read[path=../LLM_Mock/auth_spec.txt;cap=" + cap + "]\n";
+
+    // 1. Parse payload
+    LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+    AST ast = parser.parse(payload);
+    assert(ast.statements.size() == 1);
+    std::cout << "  - Parsed successfully.\n";
+
+    // 2. Validate Schema
+    SchemaValidator schema_val;
+    SchemaValidator::ValidationResult schema_res = schema_val.validate(ast);
+    assert(schema_res.valid);
+    std::cout << "  - Schema validation passed.\n";
+
+    // 3. Evaluate Authorization Middleware
+    LLMTOPMiddleware middleware(validator, false); // allow_delegation = false
+    LLMTOPMiddleware::ExecutionPlan plan = middleware.evaluate(ast);
+    assert(plan.authorized);
+    std::cout << "  - Middleware authorization passed.\n";
+
+    // 4. Simulate Action Execution (Read auth_spec.txt)
+    std::ifstream infile("../LLM_Mock/auth_spec.txt");
+    assert(infile.good());
+    std::stringstream buffer;
+    buffer << infile.rdbuf();
+    std::string file_content = buffer.str();
+    assert(file_content.find("login(string user, string pass)") != std::string::npos);
+    std::cout << "  - Dereferenced context content verification: SUCCESS.\n";
+    std::cout << "[PASS] Integration Test 1 passed successfully.\n";
+}
+
+void run_scenario_2_astar_executor() {
+    std::cout << "\n[INTEGRATION TEST 2] Pathfinding Executor Scenario...\n";
+
+    auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
+    // Create token for agent "coder" with execution capability on "run"
+    std::string cap = validator->create_token("coder", "execute:run", 9999999999LL);
+
+    std::string payload = 
+        "VER:LLM-TOPv1 CHK:sha256:2222 AGT:coder UID:anon TIM:2026-07-18 REQID:req2 FALLBACK:json\n"
+        "[EXEC] tgt:../LLM_Mock/astar.cpp:cap=" + cap + " act:execute GL:run_astar\n"
+        "!run[target=../LLM_Mock/astar.cpp;cap=" + cap + "]\n";
+
+    // 1. Parse payload
+    LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+    AST ast = parser.parse(payload);
+    assert(ast.statements.size() == 1);
+    std::cout << "  - Parsed successfully.\n";
+
+    // 2. Validate Schema
+    SchemaValidator schema_val;
+    SchemaValidator::ValidationResult schema_res = schema_val.validate(ast);
+    assert(schema_res.valid);
+    std::cout << "  - Schema validation passed.\n";
+
+    // 3. Evaluate Authorization Middleware
+    LLMTOPMiddleware middleware(validator, false);
+    LLMTOPMiddleware::ExecutionPlan plan = middleware.evaluate(ast);
+    assert(plan.authorized);
+    std::cout << "  - Middleware authorization passed.\n";
+    std::cout << "[PASS] Integration Test 2 passed successfully.\n";
+}
+
+int main() {
+    std::cout << "Running LLM-TOP Real-World Style Project Integration Tests...\n";
+    run_scenario_1_auth_reader();
+    run_scenario_2_astar_executor();
+    std::cout << "\nAll Integration Tests completed successfully.\n";
+    return 0;
+}

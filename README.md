@@ -1,6 +1,6 @@
 # LLM-TOP (LLM Token-Optimized Protocol)
 
-LLM-TOP is an ultra-dense, token-optimized protocol layer designed specifically for multi-agent LLM orchestration. By stripping away grammatical English and conversational filler in favor of strict, structured key-value markers, LLM-TOP achieves **~55% token reduction** while maintaining perfect semantic fidelity and execution capability.
+LLM-TOP is an ultra-dense, token-optimized protocol layer designed specifically for multi-agent LLM orchestration. By stripping away grammatical English and conversational filler in favor of strict, structured key-value markers, LLM-TOP achieves **~53% token reduction** while maintaining perfect semantic fidelity and execution capability.
 
 ## Features
 1. **Token Efficiency**: Compresses instructions down to raw semantic markers (`tgt:`, `act:`, `GL:`, `TD:`).
@@ -33,11 +33,11 @@ ctest -C Debug -V
 ```
 
 ## Performance & Benchmarks
-Based on token counts from 5 real-world multi-agent payload scenarios, LLM-TOP provides substantial token savings compared to alternative formats:
-- **vs. Verbose JSON:** **55.0%** median token reduction (range: 44.1% to 57.4%)
-- **vs. Compact JSON:** **55.0%** median token reduction (range: 44.1% to 57.4%)
-- **vs. Minimal JSON:** **52.8%** median token reduction (range: 42.0% to 55.2%)
-- **vs. YAML:** **12.1%** median token reduction (range: -4.0% to 17.0%)
+Based on token counts from 7 real-world multi-agent payload scenarios, LLM-TOP provides substantial token savings compared to alternative formats:
+- **vs. Verbose JSON:** **53.3%** median token reduction (range: 41.1% to 57.4%)
+- **vs. Compact JSON:** **53.3%** median token reduction (range: 41.1% to 57.4%)
+- **vs. Minimal JSON:** **51.6%** median token reduction (range: 38.9% to 55.2%)
+- **vs. YAML:** **10.3%** median token reduction (range: -4.0% to 17.0%)
 
 ## Why LLM-TOP?
 During simulated multi-agent stress tests (Phase 3), we passed highly complex requirements (such as "Implement an A* pathfinding algorithm using a Manhattan distance heuristic") strictly using LLM-TOP shorthands (`GL:AStar_pathfind TD:heur=manhattan`). 
