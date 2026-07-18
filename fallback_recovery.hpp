@@ -1,10 +1,13 @@
 #pragma once
 #include "parser_v2.hpp"
+#include "json_utils.hpp"
+#include "time_utils.hpp"
 #include <iostream>
 #include <string>
 #include <vector>
 #include <sstream>
 #include <ctime>
+#include <cassert>
 
 // Fallback Recovery System for LLM-TOP
 // When a payload is corrupted or malformed, this system:
@@ -42,7 +45,7 @@ public:
             plan.error_details.push_back(ast.diagnostic);
         }
 
-        plan.statements_total = ast.statements.size();
+        plan.statements_total = static_cast<int>(ast.statements.size());
         
         // Count successfully parsed statements
         for (const auto& stmt : ast.statements) {
@@ -96,7 +99,7 @@ public:
         oss << "  4. Validate capability tokens (cap=...) have matching ttl=...\n";
         oss << "  5. Re-validate the header (VER, CHK, AGT, UID, TIM, REQID)\n";
 
-        oss << "\nORIGINAL_PAYLOAD_HASH:sha256:" << compute_simple_hash(original_payload) << "\n";
+        oss << "\nORIGINAL_PAYLOAD_HASH:djb2:" << compute_simple_hash(original_payload) << "\n";
 
         return oss.str();
     }
@@ -134,7 +137,7 @@ public:
         js << "  \"diagnostic_messages\": [\n";
 
         for (size_t i = 0; i < plan.error_details.size(); ++i) {
-            js << "    \"" << escape_json_string(plan.error_details[i]) << "\"";
+            js << "    \"" << escape_json(plan.error_details[i]) << "\"";
             if (i + 1 < plan.error_details.size()) js << ",";
             js << "\n";
         }
@@ -152,7 +155,7 @@ public:
             bool first = true;
             for (const auto& kv : stmt.kvpairs) {
                 if (!first) js << ", ";
-                js << "\"" << kv.first << "\": \"" << escape_json_string(kv.second) << "\"";
+                js << "\"" << kv.first << "\": \"" << escape_json(kv.second) << "\"";
                 first = false;
             }
 
@@ -217,37 +220,11 @@ private:
         return oss.str();
     }
 
-    // Get ISO 8601 timestamp
-    std::string get_iso_timestamp() {
-        auto now = std::time(nullptr);
-        auto tm = std::gmtime(&now);
-        char buf[20];
-        std::strftime(buf, sizeof(buf), "%FT%TZ", tm);
-        return std::string(buf);
-    }
 
-    // Escape JSON special characters
-    std::string escape_json_string(const std::string& s) {
-        std::ostringstream oss;
-        for (char c : s) {
-            if (c == '"') oss << "\\\"";
-            else if (c == '\\') oss << "\\\\";
-            else if (c == '\n') oss << "\\n";
-            else if (c == '\r') oss << "\\r";
-            else if (c == '\t') oss << "\\t";
-            else if (static_cast<unsigned char>(c) < 0x20) {
-                oss << "\\u" << std::hex << std::setw(4) << std::setfill('0') 
-                    << static_cast<int>(c);
-            } else {
-                oss << c;
-            }
-        }
-        return oss.str();
-    }
 };
 
 // Test the recovery system
-void test_fallback_recovery() {
+inline void test_fallback_recovery() {
     std::cout << "Testing FallbackRecoveryManager...\n";
 
     // Create an AST with diagnostics (simulating a parse error)

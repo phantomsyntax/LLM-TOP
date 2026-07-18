@@ -23,9 +23,13 @@ x64/
 # Visual Studio
 .vs/
 *.sln
+*.slnx
 *.vcxproj
 *.vcxproj.filters
 *.vcxproj.user
+
+# Out-of-source builds
+build*/
 
 # Local mock tests
 MockProject/

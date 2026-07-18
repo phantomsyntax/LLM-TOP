@@ -10,20 +10,26 @@
 int estimateTokens(const std::string& text) {
     int count = 0;
     bool in_word = false;
+    int word_len = 0;
     for (char c : text) {
         if (std::isalnum(c)) {
             if (!in_word) {
                 count++;
                 in_word = true;
+                word_len = 0;
             }
+            word_len++;
             // Add extra token penalty for very long words (camelCase/paths)
-            if (count > 0 && count % 5 == 0) { count++; } 
+            // Simulates BPE subword splitting: every 5 chars adds a subword token
+            if (word_len > 0 && word_len % 5 == 0) { count++; }
         } else if (std::isspace(c)) {
             in_word = false;
+            word_len = 0;
         } else {
             // Punctuation is usually its own token in BPE
             count++;
             in_word = false;
+            word_len = 0;
         }
     }
     return count;
@@ -68,8 +74,8 @@ int main() {
   ]
 })";
 
-    int top_chars = top_payload.length();
-    int json_chars = json_payload.length();
+    size_t top_chars = top_payload.length();
+    size_t json_chars = json_payload.length();
     
     int top_tokens = estimateTokens(top_payload);
     int json_tokens = estimateTokens(json_payload);

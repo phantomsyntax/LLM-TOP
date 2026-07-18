@@ -110,8 +110,7 @@ int main() {
         // Small integers should encode in 1 byte
         // Large integers should encode in 2-4 bytes
 
-        std::vector<uint8_t> small;
-        encoder.encode_header(
+        auto small = encoder.encode_header(
             "v1",  // Small strings
             "a",
             "b",
@@ -120,7 +119,14 @@ int main() {
             "e"
         );
 
+        // Equivalent text representation for size comparison
+        std::string text_equiv = "VER:v1 CHK:a AGT:b UID:c TIM:d REQID:e";
+
+        assert(small.size() > 0);
+        assert(small.size() < text_equiv.length());
+
         std::cout << "Small header encoded size: ~" << small.size() << " bytes\n";
+        std::cout << "Text equivalent size: " << text_equiv.length() << " bytes\n";
         std::cout << "Result: PASS\n\n";
     }
 

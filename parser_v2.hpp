@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <optional>
 #include <iomanip>
+#include "json_utils.hpp"
 
 struct Header {
     std::string ver;
@@ -38,44 +39,34 @@ struct AST {
     bool recovery_attempted = false;
 };
 
-inline std::string escapeJson(const std::string& s) {
-    std::ostringstream o;
-    for (char c : s) {
-        if (c == '"' || c == '\\' || ('\x00' <= c && c <= '\x1f')) {
-            o << "\\u" << std::hex << std::setw(4) << std::setfill('0') << (int)c;
-        } else {
-            o << c;
-        }
-    }
-    return o.str();
-}
+// escapeJson removed — use escape_json() from json_utils.hpp
 
 inline std::string toJson(const AST& ast) {
     std::ostringstream js;
-    js << "{\n  \"version\": \"" << escapeJson(ast.header.ver) << "\",\n";
-    js << "  \"checksum\": \"" << escapeJson(ast.header.chk) << "\",\n";
-    if (!ast.diagnostic.empty()) js << "  \"diagnostic\": \"" << escapeJson(ast.diagnostic) << "\",\n";
+    js << "{\n  \"version\": \"" << escape_json(ast.header.ver) << "\",\n";
+    js << "  \"checksum\": \"" << escape_json(ast.header.chk) << "\",\n";
+    if (!ast.diagnostic.empty()) js << "  \"diagnostic\": \"" << escape_json(ast.diagnostic) << "\",\n";
     if (ast.recovery_attempted) js << "  \"recovery_attempted\": true,\n";
     js << "  \"statements\": [\n";
     for (size_t i = 0; i < ast.statements.size(); ++i) {
         const auto& stmt = ast.statements[i];
-        js << "    {\n      \"role\": \"" << escapeJson(stmt.role) << "\",\n      \"kvpairs\": {";
+        js << "    {\n      \"role\": \"" << escape_json(stmt.role) << "\",\n      \"kvpairs\": {";
         bool first_kv = true;
         for (const auto& kv : stmt.kvpairs) {
             if (!first_kv) js << ", ";
-            js << "\"" << escapeJson(kv.first) << "\": \"" << escapeJson(kv.second) << "\"";
+            js << "\"" << escape_json(kv.first) << "\": \"" << escape_json(kv.second) << "\"";
             first_kv = false;
         }
         js << "},\n      \"commands\": [\n";
         for (size_t j = 0; j < stmt.tool_calls.size(); ++j) {
             const auto& tc = stmt.tool_calls[j];
-            js << "        {\n          \"tool\": \"" << escapeJson(tc.name) << "\",\n";
-            if (tc.method) js << "          \"method\": \"" << escapeJson(*tc.method) << "\",\n";
+            js << "        {\n          \"tool\": \"" << escape_json(tc.name) << "\",\n";
+            if (tc.method) js << "          \"method\": \"" << escape_json(*tc.method) << "\",\n";
             js << "          \"args\": {";
             bool first_arg = true;
             for (const auto& arg : tc.args) {
                 if (!first_arg) js << ", ";
-                js << "\"" << escapeJson(arg.first) << "\": \"" << escapeJson(arg.second) << "\"";
+                js << "\"" << escape_json(arg.first) << "\": \"" << escape_json(arg.second) << "\"";
                 first_arg = false;
             }
             js << "}\n        }" << (j + 1 < stmt.tool_calls.size() ? "," : "") << "\n";

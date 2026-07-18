@@ -71,7 +71,7 @@ private:
         StatementSchema exec_schema;
         exec_schema.type = StatementType::EXEC;
         exec_schema.required_fields = {
-            {"tgt", false, true, "Target file or function"},
+            {"tgt", true, true, "Target file or function"},
             {"act", true, false, "Action (execute, call, invoke)"}
         };
         exec_schema.optional_fields = {
@@ -86,7 +86,7 @@ private:
         StatementSchema coder_schema;
         coder_schema.type = StatementType::CODER;
         coder_schema.required_fields = {
-            {"tgt", false, true, "Target file for code generation"},
+            {"tgt", true, true, "Target file for code generation"},
             {"act", true, false, "Action (create, refactor, fix)"},
             {"GL", true, false, "Goal of code generation"}
         };
@@ -101,7 +101,7 @@ private:
         StatementSchema read_schema;
         read_schema.type = StatementType::READ;
         read_schema.required_fields = {
-            {"tgt", false, true, "File or memory location to read"}
+            {"tgt", true, true, "File or memory location to read"}
         };
         read_schema.optional_fields = {
             {"range", false, false, "Line range (e.g., L1-50)"}
@@ -207,7 +207,7 @@ private:
 };
 
 // Test the schema validator
-void test_schema_validator() {
+inline void test_schema_validator() {
     std::cout << "Testing SchemaValidator...\n";
 
     // Create a valid AST

@@ -8,7 +8,7 @@
 #include <unordered_map>
 
 // Binary encoding for LLM-TOP payloads
-// Achieves ~30-40% compression vs. text format through:
+// Achieves ~10-40% compression vs. text format (depending on payload size/type) through:
 // 1. Symbol tables (8-bit opcodes for common fields)
 // 2. Varint encoding for integers and lengths
 // 3. Packed bit fields for flags
@@ -190,16 +190,16 @@ private:
     // Encode [opcode][length][string_data]
     void encode_string(std::vector<uint8_t>& buffer, uint8_t opcode, const std::string& value) {
         buffer.push_back(opcode);
-        encode_varint(buffer, value.length());
+        encode_varint(buffer, static_cast<uint32_t>(value.length()));
         buffer.insert(buffer.end(), value.begin(), value.end());
     }
 
     // Encode generic KV pair: [OP_TOOL_ARG][key_len][key][val_len][val]
     void encode_generic_kvpair(std::vector<uint8_t>& buffer, const std::string& key, const std::string& value) {
         buffer.push_back(static_cast<uint8_t>(Opcode::OP_TOOL_ARG));
-        encode_varint(buffer, key.length());
+        encode_varint(buffer, static_cast<uint32_t>(key.length()));
         buffer.insert(buffer.end(), key.begin(), key.end());
-        encode_varint(buffer, value.length());
+        encode_varint(buffer, static_cast<uint32_t>(value.length()));
         buffer.insert(buffer.end(), value.begin(), value.end());
     }
 
@@ -222,7 +222,7 @@ private:
 };
 
 // Test binary encoding
-void test_binary_encoding() {
+inline void test_binary_encoding() {
     std::cout << "Testing BinaryEncoder...\n";
 
     BinaryEncoder encoder;

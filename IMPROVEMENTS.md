@@ -19,7 +19,7 @@ This document outlines critical security fixes, optimizations, and architectural
 - ✅ Expiration time checking (Unix epoch)
 - ✅ Scope-based access control with wildcards
 - ✅ Subject (agent) binding support
-- ⚠️ Production: Integrate real HMAC-SHA256 or RSA verification
+- ✅ Real HMAC-SHA256 cryptographic signature verification (header-only, pure C++)
 
 **Impact:** Eliminates capability forgery attacks.
 
@@ -81,12 +81,12 @@ Validates statement structure:
 
 **File:** `binary_encoder.hpp`
 
-Achieves **20-40% compression** via:
+Achieves **10-40% compression** (depending on payload size and structure) via:
 - 8-bit opcodes for common fields
 - Varint encoding for lengths
 - Elimination of whitespace
 
-**Impact:** Reduces bandwidth by 25-40%.
+**Impact:** Reduces bandwidth by 10-40%.
 
 ---
 
@@ -132,7 +132,7 @@ auto binary = encoder.encode_header(...);
 - [x] JWT structure validation
 - [x] Expiration checking
 - [x] Scope-based access control
-- [ ] Real cryptographic signatures (production)
+- [x] Real cryptographic signatures (HMAC-SHA256)
 - [ ] Capability revocation mechanism
 - [ ] Audit logging integration
 
@@ -142,7 +142,7 @@ auto binary = encoder.encode_header(...);
 
 | Issue | Mitigation | Timeline |
 |-------|-----------|----------|
-| JWT uses placeholder verification | Use libsodium/OpenSSL | v1.2 |
+| JWT uses HMAC-SHA256 verification | Upgrade to RSA/Ed25519 if asymmetric keys are needed | v1.2 |
 | No capability revocation | Add CRL checking | v1.3 |
 | Binary auto-negotiation missing | Manual selection | v1.2 |
 | TTL comparison assumes canonical ISO8601 | Normalize timestamps | v1.1.1 |
