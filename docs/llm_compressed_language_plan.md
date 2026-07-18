@@ -1,6 +1,6 @@
 # LLM-TOP: Core Protocol Plan
 
-*(Status: Fully Implemented natively in C++. See the `LLMTOP/` repository for the complete parser, lexer, fuzzer, and multi-agent execution pipeline).*
+*(Status: Fully Implemented natively in C++. See the `LLMTOP/` repository for the core parser, lexer, fuzzer, and validation libraries).*
 
 ## Original Proposal
 The goal of LLM-TOP is to compress Agent-to-Agent communication by stripping away conversational English. 

@@ -16,7 +16,7 @@ LLM‑TOP is a compact, ASCII‑based protocol for LLM↔LLM and LLM↔tool comm
 Pointers must be treated as capabilities. Each pointer referencing files or secrets must include a capability token and TTL.
 `tgt:src/auth.ts#L45-50:cap=<base64-jwt>;ttl=2026-07-18T09:00:00Z`
 
-*Implementation Note:* The native C++ middleware arbiter (`middleware.hpp`) strictly isolates the AST and validates the cryptographic signatures of `cap` tokens, actively rejecting `ERR:cap_expired` or `ERR:cap_invalid`.
+*Implementation Note:* The native C++ middleware validator (`middleware.hpp`) evaluates the AST, cryptographically validates the signatures of `cap` tokens, and flags expired or invalid credentials via structured execution plans.
 
 ## Lexer and Quoted Strings (Parser v2)
 To prevent syntax collisions when LLMs generate tool calls containing brackets or spaces, the parser relies on a continuous state-machine Lexer. 

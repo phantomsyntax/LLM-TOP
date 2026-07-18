@@ -5,9 +5,9 @@ LLM-TOP is an ultra-dense, token-optimized protocol layer designed specifically 
 ## Features
 1. **Token Efficiency**: Compresses instructions down to raw semantic markers (`tgt:`, `act:`, `GL:`, `TD:`).
 2. **Deterministic Parsing**: A natively-compiled C++ lexer and parser (`LLMTOPParser`) guarantees that complex structures (like nested strings, spaces, and brackets) are isolated and read safely.
-3. **Cryptographic Capability Sandboxing**: Every file execution and reading operation (`!run`, `!read`) requires a signed JWT Capability Token (`cap`) with a Time-To-Live (`ttl`). If a subagent hallucinates a tool call or takes too long, the middleware blocks the execution.
-4. **Graceful Fallbacks**: If a subagent mangles the syntax beyond recovery, the Tolerant Parser automatically isolates the damage into a `diagnostic` buffer and emits a valid `FALLBACK:json` payload, ensuring orchestration pipelines never break silently.
-5. **Idempotency Protection**: Integrated idempotency flags prevent non-retryable execution faults during multi-turn orchestration chains.
+3. **Cryptographic Capability Validation**: The middleware parses and cryptographically validates JWT Capability Tokens (`cap`) with Time-To-Live (`ttl`) constraints, outputting structured authorization plans for the hosting environment to enforce.
+4. **Structured Recovery Handlers**: When parsing in Tolerant Mode, syntax failures are captured in a `diagnostic` buffer, enabling the host system to construct `FALLBACK:json` payloads and recovery instructions for upstream agents.
+5. **Idempotency Tag Support**: Parses idempotency tags, passing metadata to the hosting environment to prevent redundant tool executions.
 
 ## Project Architecture
 This repository contains the native C++ tooling required to integrate the protocol into an execution pipeline:
