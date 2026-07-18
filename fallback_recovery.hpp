@@ -106,72 +106,74 @@ public:
 
     // Generate JSON fallback when parsing fails completely
     std::string generate_fallback_json(const AST& ast, const RecoveryPlan& plan) {
-        std::ostringstream js;
+        std::string js;
+        size_t est_size = 512 + plan.error_details.size() * 128 + ast.statements.size() * 256;
+        js.reserve(est_size);
 
-        js << "{\n";
-        js << "  \"type\": \"FALLBACK\",\n";
-        js << "  \"timestamp\": \"" << get_iso_timestamp() << "\",\n";
-        js << "  \"original_reqid\": \"" << ast.header.reqid << "\",\n";
-        js << "  \"agent\": \"" << ast.header.agt << "\",\n";
-        js << "  \"error_count\": " << plan.errors_found << ",\n";
-        js << "  \"recovery_status\": \"";
+        js += "{\n";
+        js += "  \"type\": \"FALLBACK\",\n";
+        js += "  \"timestamp\": \"" + get_iso_timestamp() + "\",\n";
+        js += "  \"original_reqid\": \"" + ast.header.reqid + "\",\n";
+        js += "  \"agent\": \"" + ast.header.agt + "\",\n";
+        js += "  \"error_count\": " + std::to_string(plan.errors_found) + ",\n";
+        js += "  \"recovery_status\": \"";
         
         switch (plan.action) {
             case RecoveryAction::NO_ERROR:
-                js << "no_error";
+                js += "no_error";
                 break;
             case RecoveryAction::REPARSE_SUGGESTED:
-                js << "reparse_suggested";
+                js += "reparse_suggested";
                 break;
             case RecoveryAction::PARTIAL_SUCCESS:
-                js << "partial_success";
+                js += "partial_success";
                 break;
             case RecoveryAction::COMPLETE_FAILURE:
-                js << "complete_failure";
+                js += "complete_failure";
                 break;
         }
         
-        js << "\",\n";
-        js << "  \"statements_recovered\": " << plan.statements_recovered << ",\n";
-        js << "  \"statements_total\": " << plan.statements_total << ",\n";
-        js << "  \"diagnostic_messages\": [\n";
+        js += "\",\n";
+        js += "  \"statements_recovered\": " + std::to_string(plan.statements_recovered) + ",\n";
+        js += "  \"statements_total\": " + std::to_string(plan.statements_total) + ",\n";
+        js += "  \"diagnostic_messages\": [\n";
 
         for (size_t i = 0; i < plan.error_details.size(); ++i) {
-            js << "    \"" << escape_json(plan.error_details[i]) << "\"";
-            if (i + 1 < plan.error_details.size()) js << ",";
-            js << "\n";
+            js += "    \"" + escape_json(plan.error_details[i]) + "\"";
+            if (i + 1 < plan.error_details.size()) js += ",";
+            js += "\n";
         }
 
-        js << "  ],\n";
-        js << "  \"recovered_statements\": [\n";
+        js += "  ],\n";
+        js += "  \"recovered_statements\": [\n";
 
         // Include successfully parsed statements in JSON format
         for (size_t i = 0; i < ast.statements.size(); ++i) {
             const auto& stmt = ast.statements[i];
-            js << "    {\n";
-            js << "      \"role\": \"" << stmt.role << "\",\n";
-            js << "      \"kvpairs\": {";
+            js += "    {\n";
+            js += "      \"role\": \"" + stmt.role + "\",\n";
+            js += "      \"kvpairs\": {";
 
             bool first = true;
             for (const auto& kv : stmt.kvpairs) {
-                if (!first) js << ", ";
-                js << "\"" << kv.first << "\": \"" << escape_json(kv.second) << "\"";
+                if (!first) js += ", ";
+                js += "\"" + kv.first + "\": \"" + escape_json(kv.second) + "\"";
                 first = false;
             }
 
-            js << "},\n";
-            js << "      \"tool_count\": " << stmt.tool_calls.size() << "\n";
-            js << "    }";
-            if (i + 1 < ast.statements.size()) js << ",";
-            js << "\n";
+            js += "},\n";
+            js += "      \"tool_count\": " + std::to_string(stmt.tool_calls.size()) + "\n";
+            js += "    }";
+            if (i + 1 < ast.statements.size()) js += ",";
+            js += "\n";
         }
 
-        js << "  ],\n";
-        js << "  \"next_action\": \"Submit corrected payload with errors fixed\",\n";
-        js << "  \"support_link\": \"https://example.com/docs/fallback-recovery\"\n";
-        js << "}\n";
+        js += "  ],\n";
+        js += "  \"next_action\": \"Submit corrected payload with errors fixed\",\n";
+        js += "  \"support_link\": \"https://example.com/docs/fallback-recovery\"\n";
+        js += "}\n";
 
-        return js.str();
+        return js;
     }
 
     // Print recovery plan to stdout for Planner/Evaluator to consume

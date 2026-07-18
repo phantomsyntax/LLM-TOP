@@ -20,46 +20,49 @@ public:
     ordered_map() = default;
 
     std::string& operator[](const std::string& key) {
-        for (auto& pair : data_) {
-            if (pair.first == key) return pair.second;
+        auto it = index_.find(key);
+        if (it != index_.end()) {
+            return data_[it->second].second;
         }
         data_.emplace_back(key, "");
+        index_[key] = data_.size() - 1;
         return data_.back().second;
     }
 
     std::string& at(const std::string& key) {
-        for (auto& pair : data_) {
-            if (pair.first == key) return pair.second;
+        auto it = index_.find(key);
+        if (it != index_.end()) {
+            return data_[it->second].second;
         }
         throw std::out_of_range("ordered_map::at: key not found");
     }
 
     const std::string& at(const std::string& key) const {
-        for (const auto& pair : data_) {
-            if (pair.first == key) return pair.second;
+        auto it = index_.find(key);
+        if (it != index_.end()) {
+            return data_[it->second].second;
         }
         throw std::out_of_range("ordered_map::at: key not found");
     }
 
     iterator find(const std::string& key) {
-        for (auto it = data_.begin(); it != data_.end(); ++it) {
-            if (it->first == key) return it;
+        auto it = index_.find(key);
+        if (it != index_.end()) {
+            return data_.begin() + it->second;
         }
         return data_.end();
     }
 
     const_iterator find(const std::string& key) const {
-        for (auto it = data_.begin(); it != data_.end(); ++it) {
-            if (it->first == key) return it;
+        auto it = index_.find(key);
+        if (it != index_.end()) {
+            return data_.begin() + it->second;
         }
         return data_.end();
     }
 
     size_t count(const std::string& key) const {
-        for (const auto& pair : data_) {
-            if (pair.first == key) return 1;
-        }
-        return 0;
+        return index_.count(key);
     }
 
     iterator begin() { return data_.begin(); }
@@ -69,29 +72,39 @@ public:
 
     bool empty() const { return data_.empty(); }
     size_t size() const { return data_.size(); }
-    void clear() { data_.clear(); }
+    
+    void clear() { 
+        data_.clear(); 
+        index_.clear(); 
+    }
 
     void erase(const std::string& key) {
-        for (auto it = data_.begin(); it != data_.end(); ++it) {
-            if (it->first == key) {
-                data_.erase(it);
-                return;
+        auto it = index_.find(key);
+        if (it != index_.end()) {
+            size_t idx = it->second;
+            data_.erase(data_.begin() + idx);
+            index_.erase(it);
+            for (auto& pair : index_) {
+                if (pair.second > idx) {
+                    pair.second--;
+                }
             }
         }
     }
 
     void insert(const std::pair<std::string, std::string>& pair) {
-        for (auto& item : data_) {
-            if (item.first == pair.first) {
-                item.second = pair.second;
-                return;
-            }
+        auto it = index_.find(pair.first);
+        if (it != index_.end()) {
+            data_[it->second].second = pair.second;
+        } else {
+            data_.push_back(pair);
+            index_[pair.first] = data_.size() - 1;
         }
-        data_.push_back(pair);
     }
 
 private:
     container_type data_;
+    std::unordered_map<std::string, size_t> index_;
 };
 
 struct Header {
@@ -120,6 +133,7 @@ struct Statement {
 struct AST {
     Header header;
     std::vector<Statement> statements;
+    std::vector<Statement> healed_draft;
     std::string diagnostic;
     bool recovery_attempted = false;
 };
@@ -127,49 +141,56 @@ struct AST {
 // escapeJson removed — use escape_json() from json_utils.hpp
 
 inline std::string toJson(const AST& ast) {
-    std::ostringstream js;
-    js << "{\n  \"version\": \"" << escape_json(ast.header.ver) << "\",\n";
-    js << "  \"checksum\": \"" << escape_json(ast.header.chk) << "\",\n";
-    if (!ast.diagnostic.empty()) js << "  \"diagnostic\": \"" << escape_json(ast.diagnostic) << "\",\n";
-    if (ast.recovery_attempted) js << "  \"recovery_attempted\": true,\n";
-    js << "  \"statements\": [\n";
+    std::string js;
+    size_t est_size = 256 + ast.statements.size() * 512;
+    js.reserve(est_size);
+    js += "{\n  \"version\": \"" + escape_json(ast.header.ver) + "\",\n";
+    js += "  \"checksum\": \"" + escape_json(ast.header.chk) + "\",\n";
+    if (!ast.diagnostic.empty()) js += "  \"diagnostic\": \"" + escape_json(ast.diagnostic) + "\",\n";
+    if (ast.recovery_attempted) js += "  \"recovery_attempted\": true,\n";
+    js += "  \"statements\": [\n";
     for (size_t i = 0; i < ast.statements.size(); ++i) {
         const auto& stmt = ast.statements[i];
-        js << "    {\n      \"role\": \"" << escape_json(stmt.role) << "\",\n      \"kvpairs\": {";
+        js += "    {\n      \"role\": \"" + escape_json(stmt.role) + "\",\n      \"kvpairs\": {";
         bool first_kv = true;
         for (const auto& kv : stmt.kvpairs) {
-            if (!first_kv) js << ", ";
-            js << "\"" << escape_json(kv.first) << "\": \"" << escape_json(kv.second) << "\"";
+            if (!first_kv) js += ", ";
+            js += "\"" + escape_json(kv.first) + "\": \"" + escape_json(kv.second) + "\"";
             first_kv = false;
         }
-        js << "},\n      \"commands\": [\n";
+        js += "},\n      \"commands\": [\n";
         for (size_t j = 0; j < stmt.tool_calls.size(); ++j) {
             const auto& tc = stmt.tool_calls[j];
-            js << "        {\n          \"tool\": \"" << escape_json(tc.name) << "\",\n";
-            if (tc.method) js << "          \"method\": \"" << escape_json(*tc.method) << "\",\n";
-            js << "          \"args\": {";
+            js += "        {\n          \"tool\": \"" + escape_json(tc.name) + "\",\n";
+            if (tc.method) js += "          \"method\": \"" + escape_json(*tc.method) + "\",\n";
+            js += "          \"args\": {";
             bool first_arg = true;
             for (const auto& arg : tc.args) {
-                if (!first_arg) js << ", ";
-                js << "\"" << escape_json(arg.first) << "\": \"" << escape_json(arg.second) << "\"";
+                if (!first_arg) js += ", ";
+                js += "\"" + escape_json(arg.first) + "\": \"" + escape_json(arg.second) + "\"";
                 first_arg = false;
             }
-            js << "}\n        }" << (j + 1 < stmt.tool_calls.size() ? "," : "") << "\n";
+            js += "}\n        }" + std::string(j + 1 < stmt.tool_calls.size() ? "," : "") + "\n";
         }
-        js << "      ]\n    }" << (i + 1 < ast.statements.size() ? "," : "") << "\n";
+        js += "      ]\n    }" + std::string(i + 1 < ast.statements.size() ? "," : "") + "\n";
     }
-    js << "  ]\n}\n";
-    return js.str();
+    js += "  ]\n}\n";
+    return js;
 }
 
 class LLMTOPParser {
 public:
     enum class Mode { STRICT, TOLERANT };
 
-    LLMTOPParser(Mode mode = Mode::STRICT) : mode_(mode) {}
+    LLMTOPParser(Mode mode = Mode::STRICT, size_t max_size = 1024 * 1024) 
+        : mode_(mode), max_size_(max_size) {}
 
     AST parse(const std::string& payload) {
         AST ast;
+        if (payload.size() > max_size_) {
+            handleError(ast, "Payload size exceeds maximum allowed limit");
+            return ast;
+        }
         std::istringstream stream(payload);
         std::string line;
 
@@ -181,6 +202,16 @@ public:
         ast.header = parseHeader(ast, line);
         Statement current_stmt;
         bool has_role = false;
+        bool current_stmt_healed = false;
+
+        auto push_current_stmt = [&](Statement& stmt, bool healed) {
+            if (healed) {
+                ast.healed_draft.push_back(stmt);
+                ast.recovery_attempted = true;
+            } else {
+                ast.statements.push_back(stmt);
+            }
+        };
 
         while (std::getline(stream, line)) {
             line.erase(0, line.find_first_not_of(" \r\t"));
@@ -203,6 +234,7 @@ public:
                 if (mode_ == Mode::TOLERANT) {
                     line += "\"";
                     handleError(ast, "Self-healed unclosed quote in line (appended double-quote)");
+                    current_stmt_healed = true;
                 } else {
                     handleError(ast, "Malformed unclosed quote in line");
                 }
@@ -210,8 +242,9 @@ public:
 
             if (line[0] == '[') {
                 if (has_role || !current_stmt.kvpairs.empty() || !current_stmt.tool_calls.empty()) {
-                    ast.statements.push_back(current_stmt);
+                    push_current_stmt(current_stmt, current_stmt_healed);
                     current_stmt = Statement();
+                    current_stmt_healed = false;
                 }
                 size_t end_bracket = line.find(']');
                 if (end_bracket == std::string::npos) {
@@ -224,6 +257,7 @@ public:
                             line += "]";
                             handleError(ast, "Self-healed unclosed role bracket (appended closing bracket)");
                         }
+                        current_stmt_healed = true;
                         end_bracket = line.find(']');
                     }
                 }
@@ -233,17 +267,17 @@ public:
                 } else {
                     current_stmt.role = line.substr(1, end_bracket - 1);
                     has_role = true;
-                    parseKVPairs(ast, line.substr(end_bracket + 1), current_stmt.kvpairs);
+                    parseKVPairs(ast, line.substr(end_bracket + 1), current_stmt.kvpairs, current_stmt_healed);
                 }
             } else if (line[0] == '!') {
-                current_stmt.tool_calls.push_back(parseToolCall(ast, line));
+                current_stmt.tool_calls.push_back(parseToolCall(ast, line, current_stmt_healed));
             } else {
-                parseKVPairs(ast, line, current_stmt.kvpairs);
+                parseKVPairs(ast, line, current_stmt.kvpairs, current_stmt_healed);
             }
         }
         
         if (has_role || !current_stmt.tool_calls.empty() || !current_stmt.kvpairs.empty()) {
-            ast.statements.push_back(current_stmt);
+            push_current_stmt(current_stmt, current_stmt_healed);
         }
 
         return ast;
@@ -251,6 +285,7 @@ public:
 
 private:
     Mode mode_;
+    size_t max_size_;
 
     void handleError(AST& ast, const std::string& msg) {
         if (mode_ == Mode::STRICT) {
@@ -309,7 +344,11 @@ private:
                     case 'r': result += '\r'; i++; break;
                     case '\\': result += '\\'; i++; break;
                     case '"': result += '"'; i++; break;
-                    default: result += c;
+                    default: 
+                        result += c; 
+                        result += next; 
+                        i++; 
+                        break;
                 }
             } else {
                 result += c;
@@ -357,7 +396,14 @@ private:
     }
 
 
-    void parseKVPairs(AST& ast, const std::string& line, ordered_map& kvpairs) {
+    std::string trim(const std::string& str) {
+        size_t first = str.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos) return "";
+        size_t last = str.find_last_not_of(" \t\r\n");
+        return str.substr(first, last - first + 1);
+    }
+
+    void parseKVPairs(AST& ast, const std::string& line, ordered_map& kvpairs, bool& current_stmt_healed) {
         std::vector<std::string> tokens = lex_split(line, ' ');
         for (const auto& token : tokens) {
             size_t colon = token.find(':');
@@ -365,6 +411,10 @@ private:
                 std::string key = token.substr(0, colon);
                 std::string val = token.substr(colon + 1);
                 val = unquote_and_unescape(val);
+                if (kvpairs.count(key) > 0) {
+                    handleError(ast, "Duplicate key detected: " + key);
+                    current_stmt_healed = true;
+                }
                 kvpairs[key] = val;
             } else {
                 handleError(ast, "Malformed KV pair (missing colon): " + token);
@@ -372,7 +422,7 @@ private:
         }
     }
 
-    ToolCall parseToolCall(AST& ast, const std::string& line) {
+    ToolCall parseToolCall(AST& ast, const std::string& line, bool& current_stmt_healed) {
         ToolCall tc;
         size_t bracket_start = line.find('[');
         size_t bracket_end = std::string::npos;
@@ -407,6 +457,10 @@ private:
                         std::string k = arg.substr(0, eq);
                         std::string v = arg.substr(eq + 1);
                         v = unquote_and_unescape(v);
+                        if (tc.args.count(k) > 0) {
+                            handleError(ast, "Duplicate tool argument detected: " + k);
+                            current_stmt_healed = true;
+                        }
                         tc.args[k] = v;
                     } else {
                         handleError(ast, "Malformed tool argument: " + arg);
@@ -422,8 +476,11 @@ private:
             tc.name = line.substr(1, (method_marker != std::string::npos ? method_marker - 1 : line.length() - 1));
         }
 
+        tc.name = trim(tc.name);
+
         if (method_marker != std::string::npos) {
             tc.method = line.substr(method_marker + 1);
+            tc.method = trim(*tc.method);
         }
 
         return tc;

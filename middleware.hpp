@@ -22,18 +22,44 @@ public:
     struct JWTClaim {
         std::string sub;        // Subject (agent ID)
         std::string scope;      // Scope (e.g., "read:src/auth.ts", "write:tests/")
+        std::string iss;
+        std::string aud;
         int64_t exp;            // Expiration timestamp (Unix epoch)
         bool valid = false;
     };
 
     // Initialize validator with a shared secret key for HMAC-SHA256
-    SimpleJWTValidator(const std::string& shared_secret = "")
-        : shared_secret_(shared_secret) {}
+    SimpleJWTValidator(const std::string& shared_secret = "", 
+                       bool insecure_test_mode = false,
+                       const std::string& expected_iss = "",
+                       const std::string& expected_aud = "")
+        : expected_iss_(expected_iss), expected_aud_(expected_aud) {
+        if (!shared_secret.empty()) {
+            shared_secret_ = shared_secret;
+        } else {
+            const char* env_secret = std::getenv("LLM_TOP_JWT_SECRET");
+            if (env_secret && std::strlen(env_secret) > 0) {
+                shared_secret_ = env_secret;
+            } else if (insecure_test_mode) {
+                shared_secret_ = "llm-top-test-secret-key-2026";
+            } else {
+                throw std::runtime_error("Empty JWT secret key. Enforce security by setting LLM_TOP_JWT_SECRET environment variable.");
+            }
+        }
+    }
 
     // Create a signed JWT token for testing and internal use
-    std::string create_token(const std::string& sub, const std::string& scope, int64_t exp) {
+    std::string create_token(const std::string& sub, const std::string& scope, int64_t exp,
+                             const std::string& iss = "", const std::string& aud = "") {
         std::string header = base64url_encode("{\"alg\":\"HS256\",\"typ\":\"JWT\"}");
-        std::string payload_json = "{\"sub\":\"" + sub + "\",\"scope\":\"" + scope + "\",\"exp\":" + std::to_string(exp) + "}";
+        std::string payload_json = "{\"sub\":\"" + sub + "\",\"scope\":\"" + scope + "\",\"exp\":" + std::to_string(exp);
+        if (!iss.empty()) {
+            payload_json += ",\"iss\":\"" + iss + "\"";
+        }
+        if (!aud.empty()) {
+            payload_json += ",\"aud\":\"" + aud + "\"";
+        }
+        payload_json += "}";
         std::string payload = base64url_encode(payload_json);
         std::string signing_input = header + "." + payload;
         
@@ -65,7 +91,14 @@ public:
 
         if (signature_b64.empty()) return claim;
 
-        // Step 1: Verify HMAC-SHA256 signature
+        // Step 1: Decode header and verify alg is exactly HS256
+        std::string decoded_header = base64url_decode(header_b64);
+        std::string alg = extract_string_claim(decoded_header, "alg");
+        if (alg != "HS256") {
+            return claim; // Reject none and other algs
+        }
+
+        // Step 2: Verify HMAC-SHA256 signature
         std::string signing_input = header_b64 + "." + payload_b64;
         auto expected_sig = HMAC_SHA256::compute(shared_secret_, signing_input);
         
@@ -80,21 +113,31 @@ public:
             return claim;
         }
 
-        // Step 2: Decode and parse payload
+        // Step 3: Decode and parse payload
         std::string decoded_payload = base64url_decode(payload_b64);
         
         // Extract claims from JSON (simplified parser — handles our known format)
         claim.sub = extract_string_claim(decoded_payload, "sub");
         claim.scope = extract_string_claim(decoded_payload, "scope");
+        claim.iss = extract_string_claim(decoded_payload, "iss");
+        claim.aud = extract_string_claim(decoded_payload, "aud");
         claim.exp = extract_int_claim(decoded_payload, "exp");
 
-        // Step 3: Check expiration
+        // Step 4: Check expiration
         int64_t current_time = get_unix_timestamp();
         if (claim.exp < current_time) {
             return claim; // Expired
         }
 
-        // Step 4: Check scope matches (if requested)
+        // Step 5: Check iss and aud if configured
+        if (!expected_iss_.empty() && claim.iss != expected_iss_) {
+            return claim;
+        }
+        if (!expected_aud_.empty() && claim.aud != expected_aud_) {
+            return claim;
+        }
+
+        // Step 6: Check scope matches (if requested)
         if (!expected_scope.empty() && claim.scope != expected_scope) {
             if (!scope_matches(claim.scope, expected_scope)) {
                 return claim;
@@ -111,13 +154,13 @@ public:
         std::string result;
         result.reserve((input.size() + 2) / 3 * 4);
         
-        const auto* data = reinterpret_cast<const uint8_t*>(input.data());
         size_t len = input.size();
         
         for (size_t i = 0; i < len; i += 3) {
-            uint32_t n = static_cast<uint32_t>(data[i]) << 16;
-            if (i + 1 < len) n |= static_cast<uint32_t>(data[i + 1]) << 8;
-            if (i + 2 < len) n |= static_cast<uint32_t>(data[i + 2]);
+            uint32_t n = static_cast<uint32_t>(static_cast<uint8_t>(input[i])) << 16;
+            
+            if (i + 1 < len) n |= static_cast<uint32_t>(static_cast<uint8_t>(input[i + 1])) << 8;
+            if (i + 2 < len) n |= static_cast<uint32_t>(static_cast<uint8_t>(input[i + 2]));
             
             result += table[(n >> 18) & 0x3F];
             result += table[(n >> 12) & 0x3F];
@@ -188,14 +231,36 @@ public:
 
 private:
     std::string shared_secret_;
+    std::string expected_iss_;
+    std::string expected_aud_;
 
-    // Check if scope pattern matches requested resource
-    bool scope_matches(const std::string& granted, const std::string& requested) {
-        if (granted.find('*') != std::string::npos) {
-            std::string pattern = granted.substr(0, granted.find('*'));
-            return requested.substr(0, pattern.length()) == pattern;
+    static std::vector<std::string> split_scope(const std::string& s, char delim) {
+        std::vector<std::string> result;
+        std::stringstream ss(s);
+        std::string item;
+        while (std::getline(ss, item, delim)) {
+            result.push_back(item);
         }
-        return granted == requested;
+        return result;
+    }
+
+    // Check if scope pattern matches requested resource (split on :, * matches one segment)
+    bool scope_matches(const std::string& granted, const std::string& requested) {
+        auto g_segs = split_scope(granted, ':');
+        auto r_segs = split_scope(requested, ':');
+        if (g_segs.size() != r_segs.size()) return false;
+        for (size_t i = 0; i < g_segs.size(); ++i) {
+            if (g_segs[i] == "*") continue;
+            if (g_segs[i].find('*') != std::string::npos) {
+                std::string pattern = g_segs[i].substr(0, g_segs[i].find('*'));
+                if (r_segs[i].substr(0, pattern.length()) != pattern) {
+                    return false;
+                }
+            } else if (g_segs[i] != r_segs[i]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     // Extract a string claim value from simplified JSON
@@ -234,11 +299,12 @@ public:
         std::string error_message;
     };
 
-    // Initialize with optional JWT validator
-    LLMTOPMiddleware(std::shared_ptr<SimpleJWTValidator> jwt_validator = nullptr)
-        : jwt_validator_(jwt_validator ? jwt_validator : std::make_shared<SimpleJWTValidator>()) {}
+    // Initialize with optional JWT validator and delegation option
+    LLMTOPMiddleware(std::shared_ptr<SimpleJWTValidator> jwt_validator = nullptr, bool allow_delegation = false)
+        : jwt_validator_(jwt_validator ? jwt_validator : std::make_shared<SimpleJWTValidator>()),
+          allow_delegation_(allow_delegation) {}
 
-    ExecutionPlan evaluate(const AST& ast) {
+    ExecutionPlan evaluate(const AST& ast, bool accept_healed = false) {
         ExecutionPlan plan;
 
         // 1. Verify Request Header Integrity
@@ -247,33 +313,46 @@ public:
             return plan;
         }
 
-        // 2. Scan and Validate all Capabilities in KV pairs
-        for (const auto& stmt : ast.statements) {
-            for (const auto& kv : stmt.kvpairs) {
-                // Look for cap= patterns in pointers
-                if (kv.second.find("cap=") != std::string::npos) {
-                    std::string cap_token = extract_capability_token(kv.second);
-                    std::string resource = extract_resource_path(kv.second);
-                    
-                    if (!validate_capability(cap_token, resource, ast.header.agt)) {
-                        plan.error_message = "ERR:cap_invalid_or_expired for target: " + kv.first;
-                        return plan;
-                    }
-                    plan.approved_actions.push_back("READ/WRITE authorized for " + resource);
-                }
-            }
+        // Refuse healed statements unless explicitly opted in
+        if (!ast.healed_draft.empty() && !accept_healed) {
+            plan.error_message = "ERR:auth_rejected - Healed statements present but not accepted";
+            return plan;
+        }
 
-            // 3. Scan Tool Calls for Capabilities
-            for (const auto& tool : stmt.tool_calls) {
-                if (tool.args.find("cap") != tool.args.end()) {
-                    std::string cap_token = tool.args.at("cap");
-                    std::string scope = "execute:" + tool.name;
-                    
-                    if (!validate_capability(cap_token, scope, ast.header.agt)) {
-                        plan.error_message = "ERR:exec - Unauthorized tool call: " + tool.name;
-                        return plan;
+        std::vector<const std::vector<Statement>*> batches = { &ast.statements };
+        if (accept_healed && !ast.healed_draft.empty()) {
+            batches.push_back(&ast.healed_draft);
+        }
+
+        for (const auto* batch : batches) {
+            for (const auto& stmt : *batch) {
+                // 2. Scan and Validate all Capabilities in KV pairs
+                for (const auto& kv : stmt.kvpairs) {
+                    // Look for cap= patterns in pointers
+                    if (kv.second.find("cap=") != std::string::npos) {
+                        std::string cap_token = extract_capability_token(kv.second);
+                        std::string resource = extract_resource_path(kv.second);
+                        
+                        if (!validate_capability(cap_token, resource, ast.header.agt)) {
+                            plan.error_message = "ERR:cap_invalid_or_expired for target: " + kv.first;
+                            return plan;
+                        }
+                        plan.approved_actions.push_back("READ/WRITE authorized for " + resource);
                     }
-                    plan.approved_actions.push_back("TOOL authorized: " + tool.name);
+                }
+
+                // 3. Scan Tool Calls for Capabilities
+                for (const auto& tool : stmt.tool_calls) {
+                    if (tool.args.find("cap") != tool.args.end()) {
+                        std::string cap_token = tool.args.at("cap");
+                        std::string scope = "execute:" + tool.name;
+                        
+                        if (!validate_capability(cap_token, scope, ast.header.agt)) {
+                            plan.error_message = "ERR:exec - Unauthorized tool call: " + tool.name;
+                            return plan;
+                        }
+                        plan.approved_actions.push_back("TOOL authorized: " + tool.name);
+                    }
                 }
             }
         }
@@ -284,6 +363,7 @@ public:
 
 private:
     std::shared_ptr<SimpleJWTValidator> jwt_validator_;
+    bool allow_delegation_;
 
     bool validate_capability(const std::string& cap_token, const std::string& resource, const std::string& agent_id) {
         auto claim = jwt_validator_->verify(cap_token, resource);
@@ -292,9 +372,10 @@ private:
             return false;
         }
 
-        // Optionally verify agent_id matches claim subject
-        // (commented out for flexibility — enable for strict environments)
-        // if (claim.sub != agent_id) return false;
+        // Verify agent_id matches claim subject unless delegation is allowed
+        if (!allow_delegation_ && claim.sub != agent_id) {
+            return false;
+        }
         
         return true;
     }

@@ -257,9 +257,14 @@ private:
     uint32_t decode_varint(const std::vector<uint8_t>& buffer, size_t& pos) {
         uint32_t value = 0;
         int shift = 0;
+        int bytes_read = 0;
         while (pos < buffer.size()) {
+            if (bytes_read >= 5) {
+                throw std::runtime_error("Varint too long (max 5 bytes)");
+            }
             uint8_t byte = buffer[pos++];
-            value |= (byte & 0x7F) << shift;
+            value |= static_cast<uint32_t>(byte & 0x7F) << shift;
+            bytes_read++;
             if ((byte & 0x80) == 0) break;
             shift += 7;
         }

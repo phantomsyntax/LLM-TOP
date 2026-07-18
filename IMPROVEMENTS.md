@@ -149,6 +149,26 @@ auto binary = encoder.encode_header(...);
 
 ---
 
+## 8. Real-World Token Measurement & Performance
+
+We evaluated the token savings of LLM-TOP compared to Verbose JSON, Compact JSON (equivalent to native Python `json.dumps` with no spaces), Minimal JSON (using single-character keys), and YAML across 5 diverse, real-world multi-agent payload scenarios:
+
+| Scenario | LLM-TOP | Verbose JSON | Minimal JSON | Compact JSON | YAML |
+|----------|---------|--------------|--------------|--------------|------|
+| **Refactor Request** | 103 | 229 (55%) | 218 (52%) | 229 (55%) | 120 (14%) |
+| **Multi-file Plan** | 140 | 300 (53%) | 289 (51%) | 300 (53%) | 156 (10%) |
+| **Debugging Session** | 102 | 235 (56%) | 223 (54%) | 235 (56%) | 116 (12%) |
+| **Long-context Read** | 78 | 183 (57%) | 174 (55%) | 183 (57%) | 94 (17%) |
+| **Synthetic Large Message** | 184 | 329 (44%) | 317 (41%) | 329 (44%) | 177 (-4%) |
+
+### Summary of Savings (Token Reduction by using LLM-TOP):
+- **vs. Verbose JSON:** **55.0%** median reduction (range: 44.1% to 57.4%)
+- **vs. Compact JSON:** **55.0%** median reduction (range: 44.1% to 57.4%)
+- **vs. Minimal JSON:** **52.8%** median reduction (range: 42.0% to 55.2%)
+- **vs. YAML:** **12.1%** median reduction (range: -4.0% to 17.0%)
+
+---
+
 **Updated:** 2026-07-18
 **Version:** 1.1
 **Status:** Backward-compatible

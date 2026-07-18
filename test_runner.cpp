@@ -43,10 +43,11 @@ void test_self_healing() {
             "[CODER tgt:src/main.cpp act:refactor\n"; // Missing closing bracket
         
         AST ast = parser.parse(payload);
-        assert(ast.statements.size() == 1);
-        assert(ast.statements[0].role == "CODER");
-        assert(ast.statements[0].kvpairs["tgt"] == "src/main.cpp");
-        assert(ast.statements[0].kvpairs["act"] == "refactor");
+        assert(ast.healed_draft.size() == 1);
+        assert(ast.statements.size() == 0);
+        assert(ast.healed_draft[0].role == "CODER");
+        assert(ast.healed_draft[0].kvpairs["tgt"] == "src/main.cpp");
+        assert(ast.healed_draft[0].kvpairs["act"] == "refactor");
         assert(ast.diagnostic.find("Self-healed unclosed role bracket") != std::string::npos);
     }
 
@@ -57,9 +58,10 @@ void test_self_healing() {
             "[CODER] ctx:\"unclosed string act:refactor\n"; // Mismatched quotes
         
         AST ast = parser.parse(payload);
-        assert(ast.statements.size() == 1);
+        assert(ast.healed_draft.size() == 1);
+        assert(ast.statements.size() == 0);
         // Quotes closed automatically, entire rest of line is treated as ctx value
-        assert(ast.statements[0].kvpairs["ctx"] == "unclosed string act:refactor");
+        assert(ast.healed_draft[0].kvpairs["ctx"] == "unclosed string act:refactor");
         assert(ast.diagnostic.find("Self-healed unclosed quote") != std::string::npos);
     }
 
@@ -70,11 +72,65 @@ void test_self_healing() {
             "[CODER] tgt:src/main.cpp act:refactor\n";
         
         AST ast = parser.parse(payload);
+        assert(ast.statements.size() == 1);
+        assert(ast.healed_draft.size() == 0);
         assert(ast.header.hr == 0); // Coerced to 0
         assert(ast.diagnostic.find("Invalid HR value") != std::string::npos);
     }
 
     std::cout << "[PASS] test_self_healing (Tolerant self-healing rules verified!)\n";
+}
+
+void test_duplicate_keys() {
+    // STRICT mode duplicate keys should throw
+    {
+        std::string payload = 
+            "VER:LLM-TOPv1 CHK:sha256:abcd AGT:agent-1 UID:anon TIM:time REQID:req FALLBACK:json HR:0\n"
+            "[CODER] tgt:src/main.cpp tgt:src/main_v2.cpp act:refactor\n";
+        
+        LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+        bool caught = false;
+        try {
+            parser.parse(payload);
+        } catch (const std::runtime_error& e) {
+            if (std::string(e.what()).find("Duplicate key") != std::string::npos) {
+                caught = true;
+            }
+        }
+        assert(caught);
+    }
+
+    // TOLERANT mode duplicate keys should take the last and place in healed_draft
+    {
+        std::string payload = 
+            "VER:LLM-TOPv1 CHK:sha256:abcd AGT:agent-1 UID:anon TIM:time REQID:req FALLBACK:json HR:0\n"
+            "[CODER] tgt:src/main.cpp tgt:src/main_v2.cpp act:refactor\n";
+        
+        LLMTOPParser parser(LLMTOPParser::Mode::TOLERANT);
+        AST ast = parser.parse(payload);
+        
+        assert(ast.healed_draft.size() == 1);
+        assert(ast.statements.size() == 0);
+        assert(ast.healed_draft[0].kvpairs["tgt"] == "src/main_v2.cpp"); // Last wins!
+        assert(ast.diagnostic.find("Duplicate key detected") != std::string::npos);
+    }
+    std::cout << "[PASS] test_duplicate_keys\n";
+}
+
+void test_tool_name_trimming() {
+    std::string payload = 
+        "VER:LLM-TOPv1 CHK:sha256:abcd AGT:agent-1 UID:anon TIM:time REQID:req FALLBACK:json HR:0\n"
+        "[CODER]\n"
+        "! read [path=src/main.cpp] > my_method \n"; // Spaces around read and my_method
+
+    LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+    AST ast = parser.parse(payload);
+    
+    assert(ast.statements.size() == 1);
+    assert(ast.statements[0].tool_calls.size() == 1);
+    assert(ast.statements[0].tool_calls[0].name == "read");
+    assert(ast.statements[0].tool_calls[0].method == "my_method");
+    std::cout << "[PASS] test_tool_name_trimming\n";
 }
 
 void test_ordered_serialization() {
@@ -109,6 +165,8 @@ int main() {
     std::cout << "Running LLM-TOP Parser Tests v3...\n";
     test_quoted_strings();
     test_self_healing();
+    test_duplicate_keys();
+    test_tool_name_trimming();
     test_ordered_serialization();
     std::cout << "All tests completed successfully.\n";
     return 0;

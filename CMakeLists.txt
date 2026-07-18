@@ -19,6 +19,7 @@ add_executable(test_binary test_binary.cpp)
 add_executable(test_recovery test_recovery.cpp)
 add_executable(llmtop_parse llmtop_parse.cpp)
 add_executable(benchmarker benchmarker.cpp)
+add_executable(benchmarker_real benchmarker_real.cpp)
 add_executable(fuzzer fuzzer.cpp)
 
 # Enable CTest

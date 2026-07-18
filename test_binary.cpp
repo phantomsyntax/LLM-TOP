@@ -192,6 +192,32 @@ int main() {
         std::cout << "Result: PASS (Complete round-trip successful!)\n\n";
     }
 
+    // Test 7: Bounded varint decoding (reject long varints)
+    {
+        std::cout << "[TEST 7] Bounded varint decoding\n";
+        BinaryEncoder encoder;
+
+        // Malformed varint (6 bytes, all with MSB set)
+        std::vector<uint8_t> malformed_varint = {0x80, 0x80, 0x80, 0x80, 0x80, 0x80};
+        bool caught = false;
+        try {
+            // Build a buffer: [magic: 4 bytes][version: 1 byte][OP_VERSION][malformed_varint]
+            std::vector<uint8_t> header_buf = {0x4C, 0x4C, 0x4D, 0x54, 0x01}; // Magic + version
+            header_buf.push_back(static_cast<uint8_t>(BinaryEncoder::Opcode::OP_VERSION));
+            header_buf.insert(header_buf.end(), malformed_varint.begin(), malformed_varint.end());
+
+            size_t pos = 0;
+            encoder.decode_header(header_buf, pos);
+        } catch (const std::runtime_error& e) {
+            std::string msg = e.what();
+            if (msg.find("Varint too long") != std::string::npos) {
+                caught = true;
+            }
+        }
+        assert(caught);
+        std::cout << "Result: PASS (Successfully rejected malicious varint)\n\n";
+    }
+
     std::cout << "All binary encoder tests passed!\n";
     std::cout << "Summary: Binary format achieves 20-40% compression vs. text\n";
     return 0;
