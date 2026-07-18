@@ -150,7 +150,6 @@ private:
         }
     }
 
-    // Enhanced lexer that respects escape sequences and quote nesting
     std::vector<std::string> lex_split(const std::string& str, char delim) {
         std::vector<std::string> tokens;
         std::string current;
@@ -161,19 +160,15 @@ private:
             char c = str[i];
             
             if (in_escape) {
-                // If we're in an escape sequence, add the char literally
                 current += c;
                 in_escape = false;
             } else if (c == '\\' && in_quotes) {
-                // Start escape sequence (only valid inside quotes)
                 current += c;
                 in_escape = true;
             } else if (c == '"') {
-                // Toggle quote state
                 in_quotes = !in_quotes;
                 current += c;
             } else if (c == delim && !in_quotes) {
-                // Found unquoted delimiter
                 if (!current.empty()) {
                     tokens.push_back(current);
                     current.clear();
@@ -187,10 +182,9 @@ private:
         return tokens;
     }
 
-    // Unescape a quoted string (remove quotes and process escape sequences)
     std::string unquote_and_unescape(const std::string& quoted_str) {
         if (quoted_str.length() < 2 || quoted_str.front() != '"' || quoted_str.back() != '"') {
-            return quoted_str; // Not quoted, return as-is
+            return quoted_str;
         }
         
         std::string result;
@@ -204,7 +198,7 @@ private:
                     case 'r': result += '\r'; i++; break;
                     case '\\': result += '\\'; i++; break;
                     case '"': result += '"'; i++; break;
-                    default: result += c; // Unknown escape, keep literal
+                    default: result += c;
                 }
             } else {
                 result += c;
@@ -255,8 +249,6 @@ private:
             if (colon != std::string::npos) {
                 std::string key = token.substr(0, colon);
                 std::string val = token.substr(colon + 1);
-                
-                // Unescape if quoted
                 val = unquote_and_unescape(val);
                 kvpairs[key] = val;
             } else {
@@ -267,7 +259,6 @@ private:
 
     ToolCall parseToolCall(AST& ast, const std::string& line) {
         ToolCall tc;
-        // !tool_name[arg1=val;arg2="val with spaces"]>method
         size_t bracket_start = line.find('[');
         size_t bracket_end = std::string::npos;
         size_t method_marker = std::string::npos;
@@ -275,7 +266,6 @@ private:
         if (bracket_start != std::string::npos) {
             tc.name = line.substr(1, bracket_start - 1);
             
-            // Find closing bracket respecting escape sequences
             bool in_quotes = false;
             bool in_escape = false;
             for (size_t i = bracket_start + 1; i < line.length(); ++i) {
@@ -313,7 +303,6 @@ private:
                 handleError(ast, "Malformed tool call (missing closing bracket): " + line);
             }
         } else {
-            // No args
             method_marker = line.find('>');
             tc.name = line.substr(1, (method_marker != std::string::npos ? method_marker - 1 : line.length() - 1));
         }
