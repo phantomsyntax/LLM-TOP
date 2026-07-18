@@ -35,6 +35,7 @@ struct AST {
     Header header;
     std::vector<Statement> statements;
     std::string diagnostic;
+    bool recovery_attempted = false;
 };
 
 inline std::string escapeJson(const std::string& s) {
@@ -54,6 +55,7 @@ inline std::string toJson(const AST& ast) {
     js << "{\n  \"version\": \"" << escapeJson(ast.header.ver) << "\",\n";
     js << "  \"checksum\": \"" << escapeJson(ast.header.chk) << "\",\n";
     if (!ast.diagnostic.empty()) js << "  \"diagnostic\": \"" << escapeJson(ast.diagnostic) << "\",\n";
+    if (ast.recovery_attempted) js << "  \"recovery_attempted\": true,\n";
     js << "  \"statements\": [\n";
     for (size_t i = 0; i < ast.statements.size(); ++i) {
         const auto& stmt = ast.statements[i];
@@ -148,17 +150,30 @@ private:
         }
     }
 
-    // Lexer splitting function protecting quoted substrings
+    // Enhanced lexer that respects escape sequences and quote nesting
     std::vector<std::string> lex_split(const std::string& str, char delim) {
         std::vector<std::string> tokens;
         std::string current;
         bool in_quotes = false;
+        bool in_escape = false;
         
-        for (char c : str) {
-            if (c == '"') {
+        for (size_t i = 0; i < str.length(); ++i) {
+            char c = str[i];
+            
+            if (in_escape) {
+                // If we're in an escape sequence, add the char literally
+                current += c;
+                in_escape = false;
+            } else if (c == '\\' && in_quotes) {
+                // Start escape sequence (only valid inside quotes)
+                current += c;
+                in_escape = true;
+            } else if (c == '"') {
+                // Toggle quote state
                 in_quotes = !in_quotes;
                 current += c;
             } else if (c == delim && !in_quotes) {
+                // Found unquoted delimiter
                 if (!current.empty()) {
                     tokens.push_back(current);
                     current.clear();
@@ -167,8 +182,35 @@ private:
                 current += c;
             }
         }
+        
         if (!current.empty()) tokens.push_back(current);
         return tokens;
+    }
+
+    // Unescape a quoted string (remove quotes and process escape sequences)
+    std::string unquote_and_unescape(const std::string& quoted_str) {
+        if (quoted_str.length() < 2 || quoted_str.front() != '"' || quoted_str.back() != '"') {
+            return quoted_str; // Not quoted, return as-is
+        }
+        
+        std::string result;
+        for (size_t i = 1; i < quoted_str.length() - 1; ++i) {
+            char c = quoted_str[i];
+            if (c == '\\' && i + 1 < quoted_str.length() - 1) {
+                char next = quoted_str[i + 1];
+                switch (next) {
+                    case 'n': result += '\n'; i++; break;
+                    case 't': result += '\t'; i++; break;
+                    case 'r': result += '\r'; i++; break;
+                    case '\\': result += '\\'; i++; break;
+                    case '"': result += '"'; i++; break;
+                    default: result += c; // Unknown escape, keep literal
+                }
+            } else {
+                result += c;
+            }
+        }
+        return result;
     }
 
     Header parseHeader(AST& ast, const std::string& header_line) {
@@ -213,10 +255,9 @@ private:
             if (colon != std::string::npos) {
                 std::string key = token.substr(0, colon);
                 std::string val = token.substr(colon + 1);
-                // Remove surrounding quotes if they exist
-                if (val.size() >= 2 && val.front() == '"' && val.back() == '"') {
-                    val = val.substr(1, val.size() - 2);
-                }
+                
+                // Unescape if quoted
+                val = unquote_and_unescape(val);
                 kvpairs[key] = val;
             } else {
                 handleError(ast, "Malformed KV pair (missing colon): " + token);
@@ -234,11 +275,19 @@ private:
         if (bracket_start != std::string::npos) {
             tc.name = line.substr(1, bracket_start - 1);
             
-            // Find closing bracket ignoring quotes
+            // Find closing bracket respecting escape sequences
             bool in_quotes = false;
+            bool in_escape = false;
             for (size_t i = bracket_start + 1; i < line.length(); ++i) {
-                if (line[i] == '"') in_quotes = !in_quotes;
-                else if (line[i] == ']' && !in_quotes) {
+                char c = line[i];
+                
+                if (in_escape) {
+                    in_escape = false;
+                } else if (c == '\\' && in_quotes) {
+                    in_escape = true;
+                } else if (c == '"') {
+                    in_quotes = !in_quotes;
+                } else if (c == ']' && !in_quotes) {
                     bracket_end = i;
                     break;
                 }
@@ -252,9 +301,7 @@ private:
                     if (eq != std::string::npos) {
                         std::string k = arg.substr(0, eq);
                         std::string v = arg.substr(eq + 1);
-                        if (v.size() >= 2 && v.front() == '"' && v.back() == '"') {
-                            v = v.substr(1, v.size() - 2);
-                        }
+                        v = unquote_and_unescape(v);
                         tc.args[k] = v;
                     } else {
                         handleError(ast, "Malformed tool argument: " + arg);
