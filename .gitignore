@@ -1,0 +1,32 @@
+# CMake
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+Testing/
+*.dir/
+
+# Build outputs
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.lib
+*.dll
+Debug/
+Release/
+x64/
+
+# Visual Studio
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+# Local mock tests
+MockProject/
+LLM_Mock/

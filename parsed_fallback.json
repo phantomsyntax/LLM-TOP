@@ -1,0 +1,22 @@
+{
+  "version": "LLM-TOPv1",
+  "checksum": "sha256:7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069",
+  "diagnostic": "Malformed KV pair (missing colon): GARBAGETOKEN_THAT_FAILS_PARSER",
+  "statements": [
+    {
+      "role": "RSH",
+      "kvpairs": {"tgt": "src/auth.ts#L1-200:cap=eyJhb...;ttl=2026-07-18T09:00:00Z", "act": "refactor", "GL": "fix_multi_session+add_rate_limit", "TD": "add_tests"},
+      "commands": [
+        {
+          "tool": "read",
+          "args": {"path": "$P/src/auth.ts", "ttl": "2026-07-18T09:00:00Z", "cap": "eyJhb..."}
+        },
+        {
+          "tool": "run",
+          "method": "test",
+          "args": {"target": "tests/auth.test.ts", "idempotent": "true"}
+        }
+      ]
+    }
+  ]
+}
