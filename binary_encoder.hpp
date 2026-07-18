@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <iostream>
 #include <unordered_map>
+#include "parser_v2.hpp"
 
 // Binary encoding for LLM-TOP payloads
 // Achieves ~10-40% compression vs. text format (depending on payload size/type) through:
@@ -133,41 +134,107 @@ public:
 
     // Decode binary back to text (for testing round-trip)
     std::string decode_header(const std::vector<uint8_t>& buffer, size_t& pos) {
-        std::string result;
-
-        // Check magic bytes
         if (buffer.size() < 5 || buffer[0] != 0x4C || buffer[1] != 0x4C || 
             buffer[2] != 0x4D || buffer[3] != 0x54) {
             throw std::runtime_error("Invalid binary format: missing magic bytes");
         }
 
         pos = 5; // Skip magic + version
+        std::string result;
 
-        // Decode fields
-        result += "VER:";
-        pos = decode_string(buffer, pos, result);
-        result += " ";
+        while (pos < buffer.size()) {
+            uint8_t op = buffer[pos];
+            if (op >= 0x10) break; // Finished header fields
 
-        result += "CHK:";
-        pos = decode_string(buffer, pos, result);
-        result += " ";
+            if (!result.empty()) result += " ";
 
-        result += "AGT:";
-        pos = decode_string(buffer, pos, result);
-        result += " ";
-
-        result += "UID:";
-        pos = decode_string(buffer, pos, result);
-        result += " ";
-
-        result += "TIM:";
-        pos = decode_string(buffer, pos, result);
-        result += " ";
-
-        result += "REQID:";
-        pos = decode_string(buffer, pos, result);
+            switch (static_cast<Opcode>(op)) {
+                case Opcode::OP_VERSION:   result += "VER:"; break;
+                case Opcode::OP_CHECKSUM:  result += "CHK:"; break;
+                case Opcode::OP_AGENT:     result += "AGT:"; break;
+                case Opcode::OP_UID:       result += "UID:"; break;
+                case Opcode::OP_TIMESTAMP: result += "TIM:"; break;
+                case Opcode::OP_REQID:     result += "REQID:"; break;
+                case Opcode::OP_FALLBACK:  result += "FALLBACK:"; break;
+                case Opcode::OP_HR:        result += "HR:"; break;
+                default:
+                    throw std::runtime_error("Unknown header opcode");
+            }
+            pos = decode_string(buffer, pos, result);
+        }
 
         return result;
+    }
+
+    // Decode a binary statement back to Statement structure
+    Statement decode_statement(const std::vector<uint8_t>& buffer, size_t& pos) {
+        Statement stmt;
+
+        while (pos < buffer.size()) {
+            uint8_t op_byte = buffer[pos];
+            Opcode op = static_cast<Opcode>(op_byte);
+
+            if (op == Opcode::OP_END_STATEMENT) {
+                pos++; // Consume end marker
+                break;
+            }
+            if (op == Opcode::OP_END_MESSAGE) {
+                pos++; // Consume end marker
+                break;
+            }
+
+            if (op == Opcode::OP_ROLE) {
+                std::string role;
+                pos = decode_string(buffer, pos, role);
+                stmt.role = role;
+            } 
+            else if (op == Opcode::OP_TOOL_NAME) {
+                std::string tool_name;
+                pos = decode_string(buffer, pos, tool_name);
+                ToolCall tc;
+                tc.name = tool_name;
+                stmt.tool_calls.push_back(tc);
+            } 
+            else if (op == Opcode::OP_TOOL_ARG) {
+                // Generic KV pair: [key_len][key][val_len][val]
+                pos++; // Consume OP_TOOL_ARG
+                uint32_t key_len = decode_varint(buffer, pos);
+                if (pos + key_len > buffer.size()) throw std::runtime_error("Key buffer underflow");
+                std::string key(reinterpret_cast<const char*>(buffer.data() + pos), key_len);
+                pos += key_len;
+
+                uint32_t val_len = decode_varint(buffer, pos);
+                if (pos + val_len > buffer.size()) throw std::runtime_error("Value buffer underflow");
+                std::string val(reinterpret_cast<const char*>(buffer.data() + pos), val_len);
+                pos += val_len;
+
+                stmt.kvpairs[key] = val;
+            } 
+            else {
+                // Predefined statement field opcode: [OPCODE][len][val]
+                std::string key;
+                switch (op) {
+                    case Opcode::OP_TARGET:    key = "tgt"; break;
+                    case Opcode::OP_ACTION:    key = "act"; break;
+                    case Opcode::OP_GOAL:      key = "GL"; break;
+                    case Opcode::OP_TODO:      key = "TD"; break;
+                    case Opcode::OP_CONTEXT:   key = "ctx"; break;
+                    case Opcode::OP_ERR:       key = "err"; break;
+                    case Opcode::OP_REQ:       key = "req"; break;
+                    case Opcode::OP_DEP:       key = "dep"; break;
+                    case Opcode::OP_FN:        key = "fn"; break;
+                    case Opcode::OP_CLS:       key = "cls"; break;
+                    case Opcode::OP_VAR:       key = "var"; break;
+                    default:
+                        throw std::runtime_error("Unknown statement opcode: " + std::to_string(op_byte));
+                }
+                std::string val;
+                pos = decode_string(buffer, pos, val);
+                stmt.kvpairs[key] = val;
+            }
+        }
+
+        return stmt;
     }
 
     // Get compression ratio

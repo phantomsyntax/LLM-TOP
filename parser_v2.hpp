@@ -9,6 +9,91 @@
 #include <iomanip>
 #include "json_utils.hpp"
 
+// Custom insertion-ordered map to maintain sequence order of protocol keys (tgt, act, etc.)
+class ordered_map {
+public:
+    using value_type = std::pair<std::string, std::string>;
+    using container_type = std::vector<value_type>;
+    using iterator = container_type::iterator;
+    using const_iterator = container_type::const_iterator;
+
+    ordered_map() = default;
+
+    std::string& operator[](const std::string& key) {
+        for (auto& pair : data_) {
+            if (pair.first == key) return pair.second;
+        }
+        data_.emplace_back(key, "");
+        return data_.back().second;
+    }
+
+    std::string& at(const std::string& key) {
+        for (auto& pair : data_) {
+            if (pair.first == key) return pair.second;
+        }
+        throw std::out_of_range("ordered_map::at: key not found");
+    }
+
+    const std::string& at(const std::string& key) const {
+        for (const auto& pair : data_) {
+            if (pair.first == key) return pair.second;
+        }
+        throw std::out_of_range("ordered_map::at: key not found");
+    }
+
+    iterator find(const std::string& key) {
+        for (auto it = data_.begin(); it != data_.end(); ++it) {
+            if (it->first == key) return it;
+        }
+        return data_.end();
+    }
+
+    const_iterator find(const std::string& key) const {
+        for (auto it = data_.begin(); it != data_.end(); ++it) {
+            if (it->first == key) return it;
+        }
+        return data_.end();
+    }
+
+    size_t count(const std::string& key) const {
+        for (const auto& pair : data_) {
+            if (pair.first == key) return 1;
+        }
+        return 0;
+    }
+
+    iterator begin() { return data_.begin(); }
+    const_iterator begin() const { return data_.begin(); }
+    iterator end() { return data_.end(); }
+    const_iterator end() const { return data_.end(); }
+
+    bool empty() const { return data_.empty(); }
+    size_t size() const { return data_.size(); }
+    void clear() { data_.clear(); }
+
+    void erase(const std::string& key) {
+        for (auto it = data_.begin(); it != data_.end(); ++it) {
+            if (it->first == key) {
+                data_.erase(it);
+                return;
+            }
+        }
+    }
+
+    void insert(const std::pair<std::string, std::string>& pair) {
+        for (auto& item : data_) {
+            if (item.first == pair.first) {
+                item.second = pair.second;
+                return;
+            }
+        }
+        data_.push_back(pair);
+    }
+
+private:
+    container_type data_;
+};
+
 struct Header {
     std::string ver;
     std::string chk;
@@ -22,13 +107,13 @@ struct Header {
 
 struct ToolCall {
     std::string name;
-    std::unordered_map<std::string, std::string> args;
+    ordered_map args;
     std::optional<std::string> method;
 };
 
 struct Statement {
     std::string role;
-    std::unordered_map<std::string, std::string> kvpairs;
+    ordered_map kvpairs;
     std::vector<ToolCall> tool_calls;
 };
 
@@ -271,7 +356,8 @@ private:
         return h;
     }
 
-    void parseKVPairs(AST& ast, const std::string& line, std::unordered_map<std::string, std::string>& kvpairs) {
+
+    void parseKVPairs(AST& ast, const std::string& line, ordered_map& kvpairs) {
         std::vector<std::string> tokens = lex_split(line, ' ');
         for (const auto& token : tokens) {
             size_t colon = token.find(':');

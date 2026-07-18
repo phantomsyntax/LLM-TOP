@@ -77,10 +77,39 @@ void test_self_healing() {
     std::cout << "[PASS] test_self_healing (Tolerant self-healing rules verified!)\n";
 }
 
+void test_ordered_serialization() {
+    std::string payload = 
+        "VER:LLM-TOPv1 CHK:sha256:abcd AGT:agent-1 UID:anon TIM:time REQID:req FALLBACK:json HR:0\n"
+        "[CODER] tgt:src/main.cpp act:refactor GL:fix_memory_leak TD:close_db_connection\n";
+
+    LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+    AST ast = parser.parse(payload);
+
+    std::string json_str = toJson(ast);
+    
+    // Key ordering must be exactly preserved: tgt -> act -> GL -> TD
+    size_t pos_tgt = json_str.find("\"tgt\"");
+    size_t pos_act = json_str.find("\"act\"");
+    size_t pos_gl  = json_str.find("\"GL\"");
+    size_t pos_td  = json_str.find("\"TD\"");
+
+    assert(pos_tgt != std::string::npos);
+    assert(pos_act != std::string::npos);
+    assert(pos_gl != std::string::npos);
+    assert(pos_td != std::string::npos);
+
+    assert(pos_tgt < pos_act);
+    assert(pos_act < pos_gl);
+    assert(pos_gl < pos_td);
+
+    std::cout << "[PASS] test_ordered_serialization (Sequence order preserved!)\n";
+}
+
 int main() {
     std::cout << "Running LLM-TOP Parser Tests v3...\n";
     test_quoted_strings();
     test_self_healing();
+    test_ordered_serialization();
     std::cout << "All tests completed successfully.\n";
     return 0;
 }

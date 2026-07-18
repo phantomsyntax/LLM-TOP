@@ -161,6 +161,37 @@ int main() {
         std::cout << "Result: PASS\n\n";
     }
 
+    // Test 6: Round-Trip Binary Encoding and Decoding
+    {
+        std::cout << "[TEST 6] Round-trip statement encoding and decoding\n";
+        BinaryEncoder encoder;
+
+        std::unordered_map<std::string, std::string> original_kv;
+        original_kv["tgt"] = "src/auth.ts";
+        original_kv["act"] = "refactor";
+        original_kv["GL"] = "fix_leak";
+        original_kv["err"] = "missing_dependency";
+        original_kv["custom_key"] = "custom_value"; // Test generic key-value encoding
+
+        auto binary = encoder.encode_statement("CODER", original_kv, {"read", "write"});
+
+        size_t pos = 0;
+        Statement decoded = encoder.decode_statement(binary, pos);
+
+        assert(decoded.role == "CODER");
+        assert(decoded.kvpairs["tgt"] == "src/auth.ts");
+        assert(decoded.kvpairs["act"] == "refactor");
+        assert(decoded.kvpairs["GL"] == "fix_leak");
+        assert(decoded.kvpairs["err"] == "missing_dependency");
+        assert(decoded.kvpairs["custom_key"] == "custom_value");
+
+        assert(decoded.tool_calls.size() == 2);
+        assert(decoded.tool_calls[0].name == "read");
+        assert(decoded.tool_calls[1].name == "write");
+
+        std::cout << "Result: PASS (Complete round-trip successful!)\n\n";
+    }
+
     std::cout << "All binary encoder tests passed!\n";
     std::cout << "Summary: Binary format achieves 20-40% compression vs. text\n";
     return 0;
