@@ -1,20 +1,40 @@
 cmake_minimum_required(VERSION 3.10)
-project(LLM-TOP VERSION 1.0)
+project(LLM-TOP VERSION 1.1)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-# Core parser is header-only (parser_v2.hpp / middleware.hpp)
+# Core parser is header-only:
+#   - parser_v2.hpp: Enhanced lexer with escape sequence support
+#   - middleware.hpp: JWT validation and capability enforcement
+#   - schema_validator.hpp: Statement schema validation
+#   - binary_encoder.hpp: Binary encoding with ~30-40% compression
+#   - fallback_recovery.hpp: Recovery system for corrupted payloads
 
 # Executables
 add_executable(test_runner test_runner.cpp)
 add_executable(test_middleware test_middleware.cpp)
+add_executable(test_schema test_schema.cpp)
+add_executable(test_binary test_binary.cpp)
+add_executable(test_recovery test_recovery.cpp)
 add_executable(llmtop_parse llmtop_parse.cpp)
 add_executable(benchmarker benchmarker.cpp)
 add_executable(fuzzer fuzzer.cpp)
 
 # Enable CTest
 enable_testing()
+
+# Core parser tests
 add_test(NAME core_tests COMMAND test_runner)
 add_test(NAME middleware_tests COMMAND test_middleware)
+
+# New feature tests
+add_test(NAME schema_tests COMMAND test_schema)
+add_test(NAME binary_tests COMMAND test_binary)
+add_test(NAME recovery_tests COMMAND test_recovery)
+
+# Stability tests
 add_test(NAME fuzz_tests COMMAND fuzzer)
+
+# Optional: benchmark tests
+add_test(NAME benchmark COMMAND benchmarker)
