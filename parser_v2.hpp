@@ -102,12 +102,47 @@ public:
             line.erase(line.find_last_not_of(" \r\t") + 1);
             if (line.empty()) continue;
 
+            // Self-healing: count unescaped quotes and append missing closing quote
+            bool in_quotes = false;
+            bool in_escape = false;
+            for (char c : line) {
+                if (in_escape) {
+                    in_escape = false;
+                } else if (c == '\\') {
+                    in_escape = true;
+                } else if (c == '"') {
+                    in_quotes = !in_quotes;
+                }
+            }
+            if (in_quotes) {
+                if (mode_ == Mode::TOLERANT) {
+                    line += "\"";
+                    handleError(ast, "Self-healed unclosed quote in line (appended double-quote)");
+                } else {
+                    handleError(ast, "Malformed unclosed quote in line");
+                }
+            }
+
             if (line[0] == '[') {
                 if (has_role || !current_stmt.kvpairs.empty() || !current_stmt.tool_calls.empty()) {
                     ast.statements.push_back(current_stmt);
                     current_stmt = Statement();
                 }
                 size_t end_bracket = line.find(']');
+                if (end_bracket == std::string::npos) {
+                    if (mode_ == Mode::TOLERANT) {
+                        size_t first_space = line.find(' ');
+                        if (first_space != std::string::npos) {
+                            line.insert(first_space, "]");
+                            handleError(ast, "Self-healed unclosed role bracket (inserted closing bracket)");
+                        } else {
+                            line += "]";
+                            handleError(ast, "Self-healed unclosed role bracket (appended closing bracket)");
+                        }
+                        end_bracket = line.find(']');
+                    }
+                }
+
                 if (end_bracket == std::string::npos) {
                     handleError(ast, "Malformed role declaration: " + line);
                 } else {
@@ -220,7 +255,10 @@ private:
             else if (key == "FALLBACK") h.fallback = val;
             else if (key == "HR") {
                 try { h.hr = std::stoi(val); } 
-                catch (...) { handleError(ast, "Invalid HR value: " + val); }
+                catch (...) { 
+                    handleError(ast, "Invalid HR value: " + val + " (coerced to 0)"); 
+                    h.hr = 0;
+                }
             }
             else handleError(ast, "Unknown header key: " + key);
         }

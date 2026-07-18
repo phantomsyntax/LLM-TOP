@@ -37,6 +37,12 @@ public:
         OP_CONTEXT = 0x15,
         OP_CAPABILITY = 0x16,
         OP_TTL = 0x17,
+        OP_ERR = 0x18,
+        OP_REQ = 0x19,
+        OP_DEP = 0x1A,
+        OP_FN = 0x1B,
+        OP_CLS = 0x1C,
+        OP_VAR = 0x1D,
 
         // Tool fields
         OP_TOOL_NAME = 0x20,
@@ -95,6 +101,12 @@ public:
             {"GL", Opcode::OP_GOAL},
             {"TD", Opcode::OP_TODO},
             {"ctx", Opcode::OP_CONTEXT},
+            {"err", Opcode::OP_ERR},
+            {"req", Opcode::OP_REQ},
+            {"dep", Opcode::OP_DEP},
+            {"fn", Opcode::OP_FN},
+            {"cls", Opcode::OP_CLS},
+            {"var", Opcode::OP_VAR},
         };
 
         for (const auto& kv : kvpairs) {

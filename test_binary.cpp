@@ -130,6 +130,37 @@ int main() {
         std::cout << "Result: PASS\n\n";
     }
 
+    // Test 5: Compression of new protocol shorthand opcodes (err, req, dep, fn, cls, var)
+    {
+        std::cout << "[TEST 5] Compression of newly optimized protocol shorthands\n";
+        BinaryEncoder encoder;
+
+        std::unordered_map<std::string, std::string> kvpairs;
+        kvpairs["err"] = "missing_dependency";
+        kvpairs["req"] = "rq-456";
+        kvpairs["dep"] = "libsqlite";
+        kvpairs["fn"] = "init_db";
+        kvpairs["cls"] = "DatabaseManager";
+        kvpairs["var"] = "db_connection";
+
+        auto stmt_binary = encoder.encode_statement("EXEC", kvpairs);
+
+        // Text equivalent
+        std::string text_version = "[EXEC] err:missing_dependency req:rq-456 dep:libsqlite fn:init_db cls:DatabaseManager var:db_connection\n";
+
+        float compression = BinaryEncoder::get_compression_ratio(text_version.length(), stmt_binary.size());
+
+        std::cout << "Text size: " << text_version.length() << " bytes\n";
+        std::cout << "Binary size: " << stmt_binary.size() << " bytes\n";
+        std::cout << "Compression: " << compression << "%\n";
+
+        assert(stmt_binary.size() > 0);
+        // Predefined opcodes should achieve significant compression over text
+        assert(compression > 15.0f);
+
+        std::cout << "Result: PASS\n\n";
+    }
+
     std::cout << "All binary encoder tests passed!\n";
     std::cout << "Summary: Binary format achieves 20-40% compression vs. text\n";
     return 0;
