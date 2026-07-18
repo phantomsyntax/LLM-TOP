@@ -6,8 +6,8 @@
 void test_middleware_valid_auth() {
     std::string payload = 
         "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req1 FALLBACK:json\n"
-        "[EXEC] tgt:src/main.cpp:cap=VALID_XYZ123;ttl=2026-07-18T09:00:00Z\n"
-        "!read[path=docs.md;cap=VALID_READTOKEN]\n";
+        "[EXEC] tgt:src/main_file:cap=hdr.{\"sub\":\"planner\",\"scope\":\"src/main_file\",\"exp\":9999999999}.sig\n"
+        "!read[path=readme_md;cap=hdr.{\"sub\":\"planner\",\"scope\":\"execute:read\",\"exp\":9999999999}.sig]\n";
 
     LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
     AST ast = parser.parse(payload);
@@ -15,6 +15,9 @@ void test_middleware_valid_auth() {
     LLMTOPMiddleware middleware;
     auto plan = middleware.evaluate(ast);
 
+    if (!plan.authorized) {
+        std::cerr << "Error message: " << plan.error_message << std::endl;
+    }
     assert(plan.authorized == true);
     assert(plan.approved_actions.size() == 2);
     std::cout << "[PASS] test_middleware_valid_auth\n";
@@ -23,7 +26,7 @@ void test_middleware_valid_auth() {
 void test_middleware_expired_token() {
     std::string payload = 
         "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req2 FALLBACK:json\n"
-        "[EXEC] tgt:src/main.cpp:cap=VALID_XYZ123;ttl=2026-07-18T07:00:00Z\n"; // Expired (Current mock time is 08:30:00Z)
+        "[EXEC] tgt:src/main_file:cap=hdr.{\"sub\":\"planner\",\"scope\":\"src/main_file\",\"exp\":1}.sig\n"; // Expired
 
     LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
     AST ast = parser.parse(payload);
@@ -39,7 +42,7 @@ void test_middleware_expired_token() {
 void test_middleware_invalid_signature() {
     std::string payload = 
         "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req3 FALLBACK:json\n"
-        "!read[path=docs.md;cap=FORGED_TOKEN]\n";
+        "!read[path=readme_md;cap=hdr.{\"sub\":\"planner\",\"scope\":\"execute:read\",\"exp\":9999999999}.]\n";
 
     LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
     AST ast = parser.parse(payload);

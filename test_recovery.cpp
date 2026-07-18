@@ -46,7 +46,7 @@ int main() {
         FallbackRecoveryManager recovery;
         auto plan = recovery.analyze_and_recover(ast, "VER:... [INCOMPLETE");
 
-        assert(plan.action == FallbackRecoveryManager::RecoveryAction::PARTIAL_SUCCESS);
+        assert(plan.action == FallbackRecoveryManager::RecoveryAction::REPARSE_SUGGESTED);
         assert(plan.errors_found > 0);
         assert(plan.statements_recovered > 0);
         assert(!plan.recovery_instruction.empty());

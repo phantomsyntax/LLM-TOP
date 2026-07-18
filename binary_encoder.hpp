@@ -5,6 +5,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <iostream>
+#include <unordered_map>
 
 // Binary encoding for LLM-TOP payloads
 // Achieves ~30-40% compression vs. text format through:
