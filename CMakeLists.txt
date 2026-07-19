@@ -22,6 +22,14 @@ add_executable(llmtop_parse llmtop_parse.cpp)
 add_executable(benchmarker benchmarker.cpp)
 add_executable(benchmarker_real benchmarker_real.cpp)
 add_executable(fuzzer fuzzer.cpp)
+add_executable(test_tokenizer test_tokenizer.cpp)
+
+# The real BPE tokenizer needs the vendored cl100k_base ranks file. Pass its
+# absolute path in at compile time so the targets can be run from any directory.
+set(CL100K_RANKS "${CMAKE_CURRENT_SOURCE_DIR}/data/cl100k_base.tiktoken")
+target_compile_definitions(test_tokenizer PRIVATE CL100K_RANKS_PATH="${CL100K_RANKS}")
+target_compile_definitions(benchmarker PRIVATE CL100K_RANKS_PATH="${CL100K_RANKS}")
+target_compile_definitions(benchmarker_real PRIVATE CL100K_RANKS_PATH="${CL100K_RANKS}")
 
 # Enable CTest
 enable_testing()
@@ -34,7 +42,11 @@ add_test(NAME middleware_tests COMMAND test_middleware)
 add_test(NAME schema_tests COMMAND test_schema)
 add_test(NAME binary_tests COMMAND test_binary)
 add_test(NAME recovery_tests COMMAND test_recovery)
-add_test(NAME integration_tests COMMAND test_integration)
+# Runs from the source dir so the fixture path "../LLM_Mock/..." resolves the same
+# way regardless of where the build tree lives (in-source or out-of-source).
+add_test(NAME integration_tests COMMAND test_integration
+         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME tokenizer_tests COMMAND test_tokenizer)
 
 # Stability tests
 add_test(NAME fuzz_tests COMMAND fuzzer)

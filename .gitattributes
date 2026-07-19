@@ -8,3 +8,7 @@
 *.txt text eol=lf
 *.cmake text eol=lf
 CMakeLists.txt text eol=lf
+
+# Vendored tokenizer ranks: exact bytes must be preserved (SHA-256 verified),
+# so never apply line-ending normalization or treat as diffable text.
+*.tiktoken binary

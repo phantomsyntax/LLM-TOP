@@ -6,13 +6,30 @@
 // Shared secret for all test JWTs
 static const std::string TEST_SECRET = "llm-top-test-secret-key-2026";
 
+// Test helper: rewrite the CHK digest with a correct sha256 over the payload body
+// (everything after the first newline), so payloads satisfy integrity enforcement.
+static std::string fix_chk(std::string payload) {
+    size_t nl = payload.find('\n');
+    std::string body = (nl == std::string::npos) ? std::string("") : payload.substr(nl + 1);
+    std::string real = SHA256::hash_hex(body);
+    const std::string marker = "CHK:sha256:";
+    size_t p = payload.find(marker);
+    if (p != std::string::npos) {
+        size_t start = p + marker.size();
+        size_t end = payload.find(' ', start);
+        if (end == std::string::npos) end = (nl == std::string::npos ? payload.size() : nl);
+        payload.replace(start, end - start, real);
+    }
+    return payload;
+}
+
 void test_middleware_valid_auth() {
     // Create a validator with the test secret
     auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
 
     // Create valid tokens with far-future expiration
     std::string kv_token = validator->create_token("planner", "src/main_file", 9999999999LL);
-    std::string tool_token = validator->create_token("planner", "execute:read", 9999999999LL);
+    std::string tool_token = validator->create_token("planner", "execute:read:*", 9999999999LL);
 
     std::string payload = 
         "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req1 FALLBACK:json\n"
@@ -20,7 +37,7 @@ void test_middleware_valid_auth() {
         "!read[path=readme_md;cap=" + tool_token + "]\n";
 
     LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
-    AST ast = parser.parse(payload);
+    AST ast = parser.parse(fix_chk(payload));
 
     LLMTOPMiddleware middleware(validator);
     auto plan = middleware.evaluate(ast);
@@ -44,7 +61,7 @@ void test_middleware_expired_token() {
         "[EXEC] tgt:src/main_file:cap=" + expired_token + "\n";
 
     LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
-    AST ast = parser.parse(payload);
+    AST ast = parser.parse(fix_chk(payload));
 
     LLMTOPMiddleware middleware(validator);
     auto plan = middleware.evaluate(ast);
@@ -66,7 +83,7 @@ void test_middleware_invalid_signature() {
         "!read[path=readme_md;cap=" + bad_token + "]\n";
 
     LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
-    AST ast = parser.parse(payload);
+    AST ast = parser.parse(fix_chk(payload));
 
     LLMTOPMiddleware middleware(validator);
     auto plan = middleware.evaluate(ast);
@@ -80,7 +97,7 @@ void test_middleware_tampered_payload() {
     auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
 
     // Create a valid token, then tamper with the payload section
-    std::string valid_token = validator->create_token("planner", "execute:read", 9999999999LL);
+    std::string valid_token = validator->create_token("planner", "execute:read:*", 9999999999LL);
     
     // Find the first dot and modify a character in the payload segment
     size_t dot1 = valid_token.find('.');
@@ -95,7 +112,7 @@ void test_middleware_tampered_payload() {
         "!read[path=readme_md;cap=" + tampered + "]\n";
 
     LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
-    AST ast = parser.parse(payload);
+    AST ast = parser.parse(fix_chk(payload));
 
     LLMTOPMiddleware middleware(validator);
     auto plan = middleware.evaluate(ast);
@@ -147,14 +164,14 @@ void test_security_hardening() {
         auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
         
         // Token for agent "planner"
-        std::string cap = validator->create_token("planner", "execute:read", 9999999999LL);
+        std::string cap = validator->create_token("planner", "execute:read:*", 9999999999LL);
         
         std::string payload = 
             "VER:LLM-TOPv1 CHK:sha256:abcd AGT:attacker UID:anon TIM:2026-07-18 REQID:req_sec1 FALLBACK:json\n"
             "!read[path=readme_md;cap=" + cap + "]\n"; // AGT is attacker, token is for planner. Should be rejected!
 
         LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
-        AST ast = parser.parse(payload);
+        AST ast = parser.parse(fix_chk(payload));
 
         // Default-on sub == agent_id check
         LLMTOPMiddleware middleware(validator, false); // allow_delegation = false
@@ -184,7 +201,7 @@ void test_security_hardening() {
             "!read[path=readme_md;cap=" + bad_token + "]\n";
 
         LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
-        AST ast = parser.parse(payload);
+        AST ast = parser.parse(fix_chk(payload));
 
         LLMTOPMiddleware middleware(validator);
         auto plan = middleware.evaluate(ast);
@@ -198,8 +215,8 @@ void test_security_hardening() {
         auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET, false, "trusted_issuer", "my_agent");
 
         // Token missing iss/aud or with incorrect ones
-        std::string bad_token = validator->create_token("planner", "execute:read", 9999999999LL, "bad_issuer", "my_agent");
-        std::string good_token = validator->create_token("planner", "execute:read", 9999999999LL, "trusted_issuer", "my_agent");
+        std::string bad_token = validator->create_token("planner", "execute:read:*", 9999999999LL, "bad_issuer", "my_agent");
+        std::string good_token = validator->create_token("planner", "execute:read:*", 9999999999LL, "trusted_issuer", "my_agent");
 
         std::string payload_bad = 
             "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_sec3 FALLBACK:json\n"
@@ -211,12 +228,12 @@ void test_security_hardening() {
 
         LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
         
-        AST ast_bad = parser.parse(payload_bad);
+        AST ast_bad = parser.parse(fix_chk(payload_bad));
         LLMTOPMiddleware middleware(validator);
         auto plan_bad = middleware.evaluate(ast_bad);
         assert(plan_bad.authorized == false);
 
-        AST ast_good = parser.parse(payload_good);
+        AST ast_good = parser.parse(fix_chk(payload_good));
         auto plan_good = middleware.evaluate(ast_good);
         assert(plan_good.authorized == true);
         std::cout << "[PASS] test_security_hardening - iss and aud claims\n";
@@ -231,7 +248,7 @@ void test_security_hardening() {
         
         bool caught = false;
         try {
-            tiny_parser.parse(payload);
+            tiny_parser.parse(fix_chk(payload));
         } catch (const std::runtime_error& e) {
             std::string msg = e.what();
             if (msg.find("Payload size exceeds") != std::string::npos) {
@@ -246,10 +263,10 @@ void test_security_hardening() {
     {
         auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
         
-        // Scope with * glob segment: "execute:*"
-        std::string cap1 = validator->create_token("planner", "execute:*", 9999999999LL);
-        // Scope with prefix segment glob: "execute:src/*"
-        std::string cap2 = validator->create_token("planner", "execute:src/*", 9999999999LL);
+        // Grants read on any resource: matches execute:read:<anything>
+        std::string cap1 = validator->create_token("planner", "execute:read:*", 9999999999LL);
+        // Grants read on src/* only: does NOT match the write tool below
+        std::string cap2 = validator->create_token("planner", "execute:read:src/*", 9999999999LL);
 
         std::string payload = 
             "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req FALLBACK:json\n"
@@ -257,7 +274,7 @@ void test_security_hardening() {
             "!write[path=readme_md;cap=" + cap2 + "]\n";
 
         LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
-        AST ast = parser.parse(payload);
+        AST ast = parser.parse(fix_chk(payload));
 
         LLMTOPMiddleware middleware(validator);
         auto plan = middleware.evaluate(ast);
@@ -268,7 +285,7 @@ void test_security_hardening() {
         std::string payload_ok = 
             "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req FALLBACK:json\n"
             "!read[path=readme_md;cap=" + cap1 + "]\n";
-        AST ast_ok = parser.parse(payload_ok);
+        AST ast_ok = parser.parse(fix_chk(payload_ok));
         auto plan_ok = middleware.evaluate(ast_ok);
         assert(plan_ok.authorized == true);
 
@@ -276,8 +293,162 @@ void test_security_hardening() {
     }
 }
 
+// Fix A: the middleware must default-deny. A tool call or a tgt pointer with no
+// capability must be rejected; a pure planning statement (no tool, no pointer) passes.
+void test_fail_open_default_deny() {
+    auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
+    LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+
+    // (a) Tool call with NO capability -> reject
+    {
+        AST ast = parser.parse(fix_chk(
+            "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_fo1 FALLBACK:json\n"
+            "!read[path=/etc/secrets]\n"));
+        LLMTOPMiddleware middleware(validator);
+        auto plan = middleware.evaluate(ast);
+        assert(plan.authorized == false);
+    }
+
+    // (b) tgt pointer with NO capability -> reject
+    {
+        AST ast = parser.parse(fix_chk(
+            "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_fo2 FALLBACK:json\n"
+            "[EXEC] tgt:src/secret.ts act:read\n"));
+        LLMTOPMiddleware middleware(validator);
+        auto plan = middleware.evaluate(ast);
+        assert(plan.authorized == false);
+    }
+
+    // (c) Pure planning statement (no tool, no pointer) -> allow
+    {
+        AST ast = parser.parse(fix_chk(
+            "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_fo3 FALLBACK:json\n"
+            "[PLAN] GL:refactor_auth act:plan\n"));
+        LLMTOPMiddleware middleware(validator);
+        auto plan = middleware.evaluate(ast);
+        assert(plan.authorized == true);
+    }
+
+    std::cout << "[PASS] test_fail_open_default_deny\n";
+}
+
+// Fix B: the middleware must reject a payload whose body does not match the CHK header.
+void test_checksum_integrity() {
+    auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
+    LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+
+    // Correct checksum -> integrity passes (pure-planning statement authorizes)
+    {
+        AST ast = parser.parse(fix_chk(
+            "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_ck1 FALLBACK:json\n"
+            "[PLAN] GL:do_thing\n"));
+        LLMTOPMiddleware middleware(validator);
+        auto plan = middleware.evaluate(ast);
+        assert(plan.authorized == true);
+    }
+
+    // Body tampered after CHK was computed -> integrity fails
+    {
+        std::string good = fix_chk(
+            "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_ck2 FALLBACK:json\n"
+            "[PLAN] GL:do_thing\n");
+        std::string tampered = good;
+        size_t p = tampered.find("do_thing");
+        tampered.replace(p, 8, "do_EVILx"); // same length, different bytes
+        AST ast = parser.parse(tampered);
+        LLMTOPMiddleware middleware(validator);
+        auto plan = middleware.evaluate(ast);
+        assert(plan.authorized == false);
+        assert(plan.error_message.find("ERR:integrity") != std::string::npos);
+    }
+
+    std::cout << "[PASS] test_checksum_integrity\n";
+}
+
+// Fix C: an in-band ttl= that has passed must be rejected even if the JWT itself is valid.
+void test_ttl_enforcement() {
+    auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
+    LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+    std::string tool_cap = validator->create_token("planner", "execute:read:*", 9999999999LL);
+
+    // Expired ttl -> reject
+    {
+        AST ast = parser.parse(fix_chk(
+            "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_ttl1 FALLBACK:json\n"
+            "!read[path=readme_md;cap=" + tool_cap + ";ttl=2000-01-01T00:00:00Z]\n"));
+        LLMTOPMiddleware middleware(validator);
+        auto plan = middleware.evaluate(ast);
+        assert(plan.authorized == false);
+    }
+
+    // Future ttl -> allow
+    {
+        AST ast = parser.parse(fix_chk(
+            "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_ttl2 FALLBACK:json\n"
+            "!read[path=readme_md;cap=" + tool_cap + ";ttl=2999-01-01T00:00:00Z]\n"));
+        LLMTOPMiddleware middleware(validator);
+        auto plan = middleware.evaluate(ast);
+        assert(plan.authorized == true);
+    }
+
+    std::cout << "[PASS] test_ttl_enforcement\n";
+}
+
+// Fix E: create_token must escape claim values so a crafted sub cannot smuggle a broader scope.
+void test_create_token_no_json_injection() {
+    auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
+    // A subject that tries to inject its own "scope":"execute:*" into the payload JSON.
+    std::string evil_sub = "x\",\"scope\":\"execute:*";
+    std::string token = validator->create_token(evil_sub, "execute:read", 9999999999LL);
+
+    auto claim = validator->verify(token);
+    assert(claim.valid);
+    // The legitimately-signed scope must win; the injected "execute:*" must not be honored.
+    assert(claim.scope == "execute:read");
+
+    std::cout << "[PASS] test_create_token_no_json_injection\n";
+}
+
+// Fix #2: a tool capability must bind to its resource argument, not just the tool name.
+// Requested scope is execute:<tool>:<resource>; a token scoped to a specific resource
+// must not authorize a different resource.
+void test_tool_arg_binding() {
+    auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
+    LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+
+    // Token grants read on src/* only.
+    std::string cap = validator->create_token("planner", "execute:read:src/*", 9999999999LL);
+
+    // In-scope resource -> allow
+    {
+        AST ast = parser.parse(fix_chk(
+            "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_ab1 FALLBACK:json\n"
+            "!read[path=src/auth.ts;cap=" + cap + "]\n"));
+        LLMTOPMiddleware middleware(validator);
+        auto plan = middleware.evaluate(ast);
+        assert(plan.authorized == true);
+    }
+
+    // Out-of-scope resource with the SAME token -> reject
+    {
+        AST ast = parser.parse(fix_chk(
+            "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_ab2 FALLBACK:json\n"
+            "!read[path=/etc/passwd;cap=" + cap + "]\n"));
+        LLMTOPMiddleware middleware(validator);
+        auto plan = middleware.evaluate(ast);
+        assert(plan.authorized == false);
+    }
+
+    std::cout << "[PASS] test_tool_arg_binding\n";
+}
+
 int main() {
     std::cout << "Running LLM-TOP Middleware Tests (Real HMAC-SHA256)...\n";
+    test_fail_open_default_deny();
+    test_checksum_integrity();
+    test_ttl_enforcement();
+    test_create_token_no_json_injection();
+    test_tool_arg_binding();
     test_base64url_roundtrip();
     test_middleware_valid_auth();
     test_middleware_expired_token();

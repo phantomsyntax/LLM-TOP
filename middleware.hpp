@@ -52,12 +52,14 @@ public:
     std::string create_token(const std::string& sub, const std::string& scope, int64_t exp,
                              const std::string& iss = "", const std::string& aud = "") {
         std::string header = base64url_encode("{\"alg\":\"HS256\",\"typ\":\"JWT\"}");
-        std::string payload_json = "{\"sub\":\"" + sub + "\",\"scope\":\"" + scope + "\",\"exp\":" + std::to_string(exp);
+        // Escape all string claims so a crafted value cannot inject additional JSON keys.
+        std::string payload_json = "{\"sub\":\"" + escape_json(sub) + "\",\"scope\":\"" +
+                                   escape_json(scope) + "\",\"exp\":" + std::to_string(exp);
         if (!iss.empty()) {
-            payload_json += ",\"iss\":\"" + iss + "\"";
+            payload_json += ",\"iss\":\"" + escape_json(iss) + "\"";
         }
         if (!aud.empty()) {
-            payload_json += ",\"aud\":\"" + aud + "\"";
+            payload_json += ",\"aud\":\"" + escape_json(aud) + "\"";
         }
         payload_json += "}";
         std::string payload = base64url_encode(payload_json);
@@ -319,6 +321,13 @@ public:
             return plan;
         }
 
+        // 1b. Verify payload integrity: CHK header must equal sha256 of the body.
+        std::string computed_chk = "sha256:" + SHA256::hash_hex(ast.raw_body);
+        if (ast.header.chk != computed_chk) {
+            plan.error_message = "ERR:integrity - checksum mismatch";
+            return plan;
+        }
+
         std::vector<const std::vector<Statement>*> batches = { &ast.statements };
         if (accept_healed && !ast.healed_draft.empty()) {
             batches.push_back(&ast.healed_draft);
@@ -326,33 +335,53 @@ public:
 
         for (const auto* batch : batches) {
             for (const auto& stmt : *batch) {
-                // 2. Scan and Validate all Capabilities in KV pairs
+                // 2. Default-deny: every pointer field MUST carry a valid capability.
+                //    Non-pointer fields (act, GL, TD, ctx, ...) are not capability-gated.
                 for (const auto& kv : stmt.kvpairs) {
-                    // Look for cap= patterns in pointers
-                    if (kv.second.find("cap=") != std::string::npos) {
-                        std::string cap_token = extract_capability_token(kv.second);
-                        std::string resource = extract_resource_path(kv.second);
-                        
-                        if (!validate_capability(cap_token, resource, ast.header.agt)) {
-                            plan.error_message = "ERR:cap_invalid_or_expired for target: " + kv.first;
-                            return plan;
-                        }
-                        plan.approved_actions.push_back("READ/WRITE authorized for " + resource);
+                    if (!is_pointer_key(kv.first)) continue;
+
+                    if (kv.second.find("cap=") == std::string::npos) {
+                        plan.error_message = "ERR:cap_required - pointer field '" + kv.first +
+                                             "' has no capability token";
+                        return plan;
                     }
+                    if (!ttl_valid(extract_ttl(kv.second))) {
+                        plan.error_message = "ERR:cap_invalid_or_expired - ttl for target: " + kv.first;
+                        return plan;
+                    }
+                    std::string cap_token = extract_capability_token(kv.second);
+                    std::string resource = extract_resource_path(kv.second);
+
+                    if (!validate_capability(cap_token, resource, ast.header.agt)) {
+                        plan.error_message = "ERR:cap_invalid_or_expired for target: " + kv.first;
+                        return plan;
+                    }
+                    plan.approved_actions.push_back("READ/WRITE authorized for " + resource);
                 }
 
-                // 3. Scan Tool Calls for Capabilities
+                // 3. Default-deny: every tool call MUST carry a valid capability.
                 for (const auto& tool : stmt.tool_calls) {
-                    if (tool.args.find("cap") != tool.args.end()) {
-                        std::string cap_token = tool.args.at("cap");
-                        std::string scope = "execute:" + tool.name;
-                        
-                        if (!validate_capability(cap_token, scope, ast.header.agt)) {
-                            plan.error_message = "ERR:exec - Unauthorized tool call: " + tool.name;
-                            return plan;
-                        }
-                        plan.approved_actions.push_back("TOOL authorized: " + tool.name);
+                    auto cap_it = tool.args.find("cap");
+                    if (cap_it == tool.args.end()) {
+                        plan.error_message = "ERR:exec - missing capability for tool call: " + tool.name;
+                        return plan;
                     }
+                    auto ttl_it = tool.args.find("ttl");
+                    if (!ttl_valid(ttl_it != tool.args.end() ? ttl_it->second : std::string(""))) {
+                        plan.error_message = "ERR:exec - capability ttl expired for tool call: " + tool.name;
+                        return plan;
+                    }
+                    std::string cap_token = cap_it->second;
+                    // Bind the capability to the tool's resource argument, not just its name.
+                    std::string scope = "execute:" + tool.name;
+                    std::string resource = tool_resource(tool.args);
+                    if (!resource.empty()) scope += ":" + resource;
+
+                    if (!validate_capability(cap_token, scope, ast.header.agt)) {
+                        plan.error_message = "ERR:exec - Unauthorized tool call: " + tool.name;
+                        return plan;
+                    }
+                    plan.approved_actions.push_back("TOOL authorized: " + tool.name);
                 }
             }
         }
@@ -364,6 +393,42 @@ public:
 private:
     std::shared_ptr<SimpleJWTValidator> jwt_validator_;
     bool allow_delegation_;
+
+    // Pointer fields reference a protected resource and therefore require a capability.
+    // Kept as an explicit allow-list so it is easy to extend (matches schema is_pointer).
+    static bool is_pointer_key(const std::string& key) {
+        return key == "tgt";
+    }
+
+    // The resource a tool call operates on: first present of these argument names.
+    // Bound into the capability scope so a token cannot be reused on a different target.
+    static std::string tool_resource(const ordered_map& args) {
+        for (const std::string& k : {std::string("path"), std::string("target"),
+                                     std::string("file"), std::string("resource")}) {
+            auto it = args.find(k);
+            if (it != args.end()) return it->second;
+        }
+        return "";
+    }
+
+    // An in-band ttl (if present) must be a future ISO-8601 UTC instant.
+    // Empty ttl means "not specified" (the JWT exp still governs expiry).
+    static bool ttl_valid(const std::string& ttl_value) {
+        if (ttl_value.empty()) return true;
+        auto exp = parse_iso8601_to_epoch(ttl_value);
+        if (!exp.has_value()) return false; // malformed ttl is treated as invalid
+        return get_unix_timestamp() <= *exp;
+    }
+
+    // Extract the ttl= value from a pointer string (up to the next ';' or end).
+    std::string extract_ttl(const std::string& pointer_str) {
+        size_t pos = pointer_str.find("ttl=");
+        if (pos == std::string::npos) return "";
+        size_t start = pos + 4;
+        size_t end = pointer_str.find(';', start);
+        if (end == std::string::npos) end = pointer_str.length();
+        return pointer_str.substr(start, end - start);
+    }
 
     bool validate_capability(const std::string& cap_token, const std::string& resource, const std::string& agent_id) {
         auto claim = jwt_validator_->verify(cap_token, resource);

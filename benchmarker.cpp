@@ -4,38 +4,18 @@
 #include <sstream>
 #include <iomanip>
 #include <cctype>
+#include "tokenizer.hpp"
 
-// A heuristic token estimator mimicking BPE
-// Rules: Words are tokens. Punctuation are tokens. Spaces are absorbed or separate.
-int estimateTokens(const std::string& text) {
-    int count = 0;
-    bool in_word = false;
-    int word_len = 0;
-    for (char c : text) {
-        if (std::isalnum(c)) {
-            if (!in_word) {
-                count++;
-                in_word = true;
-                word_len = 0;
-            }
-            word_len++;
-            // Add extra token penalty for very long words (camelCase/paths)
-            // Simulates BPE subword splitting: every 5 chars adds a subword token
-            if (word_len > 0 && word_len % 5 == 0) { count++; }
-        } else if (std::isspace(c)) {
-            in_word = false;
-            word_len = 0;
-        } else {
-            // Punctuation is usually its own token in BPE
-            count++;
-            in_word = false;
-            word_len = 0;
-        }
-    }
-    return count;
-}
+#ifndef CL100K_RANKS_PATH
+#define CL100K_RANKS_PATH "data/cl100k_base.tiktoken"
+#endif
 
 int main() {
+    Cl100kTokenizer tok(CL100K_RANKS_PATH);
+    auto estimateTokens = [&](const std::string& text) {
+        return static_cast<int>(tok.count(text));
+    };
+
     std::string top_payload = 
         "VER:LLM-TOPv1 CHK:sha256:abcd AGT:ci UID:anon TIM:2026-07-18 REQID:1 FALLBACK:json\n"
         "[RSH] tgt:src/auth.ts:cap=abc;ttl=999 act:refactor GL:fix_auth TD:add_tests\n"
@@ -97,7 +77,7 @@ int main() {
               << std::fixed << std::setprecision(1) << char_reduction << "%\n";
 
     float token_reduction = 100.0f * (1.0f - (float)top_tokens / json_tokens);
-    std::cout << std::left << std::setw(20) << "Est. Tokens (BPE)" 
+    std::cout << std::left << std::setw(20) << "Tokens (cl100k)"
               << std::setw(15) << top_tokens 
               << std::setw(15) << json_tokens 
               << std::fixed << std::setprecision(1) << token_reduction << "%\n";

@@ -13,6 +13,6 @@ The LLM-TOP protocol replaces it with a highly dense, deterministic ASCII format
 ### The Three Phase Rollout (Completed)
 1. **Dictionary/Schema Finalization**: Completed via `Analysis.md` defining strict keys (`tgt`, `act`, `GL`, `TD`, `ctx`) and mandatory headers (`VER`, `CHK`, `AGT`).
 2. **System Prompt Engineering**: Completed via `Agents.md` outlining the Planner (Encoder) and Decoder topologies.
-3. **Simulated Testing (Phase 3)**: Completed successfully via isolated subagent test loops. The subagents were able to seamlessly ingest extreme shorthands (`TD:heur=manhattan`) and output flawless C++ algorithms, proving that the ~60% token reduction does not result in semantic decay.
+3. **Simulated Testing (Phase 3)**: Completed successfully via isolated subagent test loops. The subagents were able to seamlessly ingest extreme shorthands (`TD:heur=manhattan`) and output flawless C++ algorithms, indicating dense shorthand did not cause semantic decay in those runs. (The token-reduction figure itself has since been re-measured with a real cl100k_base tokenizer — **~22–24% vs minified JSON**, up to ~54% vs pretty-printed JSON; see the README. The earlier "~60%" was a punctuation-counting heuristic estimate and is retired.)
 
 This protocol achieves massive latency and cost reductions for LLM architectures communicating at scale.

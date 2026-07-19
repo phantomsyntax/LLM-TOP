@@ -41,8 +41,14 @@ public:
 
         // Check if diagnostics were captured during parsing
         if (!ast.diagnostic.empty()) {
-            plan.errors_found++;
             plan.error_details.push_back(ast.diagnostic);
+            // The parser joins individual diagnostics with " | "; count each one.
+            plan.errors_found = 1;
+            size_t pos = 0;
+            while ((pos = ast.diagnostic.find(" | ", pos)) != std::string::npos) {
+                plan.errors_found++;
+                pos += 3;
+            }
         }
 
         plan.statements_total = static_cast<int>(ast.statements.size());
@@ -79,8 +85,8 @@ public:
                                              const std::string& original_payload) {
         std::ostringstream oss;
 
-        oss << "VER:LLM-TOPv1 CHK:sha256:recovery AGT:evaluator UID:system TIM:" 
-            << get_iso_timestamp() << " REQID:" << ast.header.reqid << "_recovery FALLBACK:json\n";
+        oss << "VER:LLM-TOPv1 CHK:sha256:recovery AGT:evaluator UID:system TIM:"
+            << get_iso_timestamp() << " REQID:" << escape_json(ast.header.reqid) << "_recovery FALLBACK:json\n";
 
         oss << "[PLANNER] act:repair GL:fix_and_resubmit TD:correct_syntax,validate_format\n";
         oss << "ERROR_COUNT:" << plan.errors_found << " ";
@@ -113,8 +119,8 @@ public:
         js += "{\n";
         js += "  \"type\": \"FALLBACK\",\n";
         js += "  \"timestamp\": \"" + get_iso_timestamp() + "\",\n";
-        js += "  \"original_reqid\": \"" + ast.header.reqid + "\",\n";
-        js += "  \"agent\": \"" + ast.header.agt + "\",\n";
+        js += "  \"original_reqid\": \"" + escape_json(ast.header.reqid) + "\",\n";
+        js += "  \"agent\": \"" + escape_json(ast.header.agt) + "\",\n";
         js += "  \"error_count\": " + std::to_string(plan.errors_found) + ",\n";
         js += "  \"recovery_status\": \"";
         
@@ -151,13 +157,13 @@ public:
         for (size_t i = 0; i < ast.statements.size(); ++i) {
             const auto& stmt = ast.statements[i];
             js += "    {\n";
-            js += "      \"role\": \"" + stmt.role + "\",\n";
+            js += "      \"role\": \"" + escape_json(stmt.role) + "\",\n";
             js += "      \"kvpairs\": {";
 
             bool first = true;
             for (const auto& kv : stmt.kvpairs) {
                 if (!first) js += ", ";
-                js += "\"" + kv.first + "\": \"" + escape_json(kv.second) + "\"";
+                js += "\"" + escape_json(kv.first) + "\": \"" + escape_json(kv.second) + "\"";
                 first = false;
             }
 

@@ -161,6 +161,25 @@ void test_ordered_serialization() {
     std::cout << "[PASS] test_ordered_serialization (Sequence order preserved!)\n";
 }
 
+// Fix G: toJson must round-trip all header fields, not just version + checksum.
+void test_json_header_fidelity() {
+    std::string payload =
+        "VER:LLM-TOPv1 CHK:sha256:abcd AGT:agent-7 UID:user-9 TIM:2026-07-18 REQID:req-42 FALLBACK:json HR:2\n"
+        "[CODER] tgt:src/main.cpp act:refactor\n";
+    LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+    AST ast = parser.parse(payload);
+
+    std::string js = toJson(ast);
+    assert(js.find("\"agent\": \"agent-7\"") != std::string::npos);
+    assert(js.find("\"uid\": \"user-9\"") != std::string::npos);
+    assert(js.find("\"time\": \"2026-07-18\"") != std::string::npos);
+    assert(js.find("\"reqid\": \"req-42\"") != std::string::npos);
+    assert(js.find("\"fallback\": \"json\"") != std::string::npos);
+    assert(js.find("\"hr\": 2") != std::string::npos);
+
+    std::cout << "[PASS] test_json_header_fidelity\n";
+}
+
 int main() {
     std::cout << "Running LLM-TOP Parser Tests v3...\n";
     test_quoted_strings();
@@ -168,6 +187,7 @@ int main() {
     test_duplicate_keys();
     test_tool_name_trimming();
     test_ordered_serialization();
+    test_json_header_fidelity();
     std::cout << "All tests completed successfully.\n";
     return 0;
 }

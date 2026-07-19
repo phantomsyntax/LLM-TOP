@@ -5,33 +5,16 @@
 #include <algorithm>
 #include <numeric>
 #include <sstream>
+#include "tokenizer.hpp"
 
-// A heuristic BPE token estimator
+#ifndef CL100K_RANKS_PATH
+#define CL100K_RANKS_PATH "data/cl100k_base.tiktoken"
+#endif
+
+// Real cl100k_base (tiktoken) BPE token counts. `tok` is initialized in main().
+static Cl100kTokenizer* g_tok = nullptr;
 int estimateTokens(const std::string& text) {
-    int count = 0;
-    bool in_word = false;
-    int word_len = 0;
-    for (char c : text) {
-        if (std::isalnum(c) || c == '_') {
-            if (!in_word) {
-                count++;
-                in_word = true;
-                word_len = 0;
-            }
-            word_len++;
-            // BPE subword splitting: long tokens split into multiple subwords
-            if (word_len > 0 && word_len % 5 == 0) { count++; }
-        } else if (std::isspace(c)) {
-            in_word = false;
-            word_len = 0;
-        } else {
-            // Punctuation is usually its own token
-            count++;
-            in_word = false;
-            word_len = 0;
-        }
-    }
-    return count;
+    return static_cast<int>(g_tok->count(text));
 }
 
 struct PayloadSet {
@@ -44,6 +27,9 @@ struct PayloadSet {
 };
 
 int main() {
+    Cl100kTokenizer tok(CL100K_RANKS_PATH);
+    g_tok = &tok;
+
     std::vector<PayloadSet> scenarios = {
         // Scenario 1: Refactor request
         {
@@ -504,6 +490,7 @@ int main() {
 
     std::cout << "===============================================================\n";
     std::cout << "               REAL-WORLD TOKEN BENCHMARK\n";
+    std::cout << "        (token counts via cl100k_base / tiktoken BPE)\n";
     std::cout << "===============================================================\n\n";
 
     std::vector<float> top_vs_verbose_savings;

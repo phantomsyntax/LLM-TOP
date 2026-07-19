@@ -153,6 +153,42 @@ int main() {
         std::cout << "Result: PASS\n\n";
     }
 
+    // Test 6 (Fix I): error_count reflects the number of diagnostics, not just 0/1
+    {
+        std::cout << "[TEST 6] error_count reflects number of diagnostics\n";
+        AST ast;
+        ast.header.ver = "LLM-TOPv1";
+        ast.header.agt = "subagent";
+        ast.header.reqid = "req-006";
+        ast.diagnostic = "err one | err two | err three"; // parser joins with " | "
+
+        Statement stmt;
+        stmt.role = "CODER";
+        stmt.kvpairs["act"] = "refactor";
+        ast.statements.push_back(stmt);
+
+        FallbackRecoveryManager recovery;
+        auto plan = recovery.analyze_and_recover(ast, "payload");
+        assert(plan.errors_found == 3);
+        std::cout << "Result: PASS\n\n";
+    }
+
+    // Test 7 (Fix F): fallback JSON must escape attacker-controlled header fields
+    {
+        std::cout << "[TEST 7] fallback JSON escapes header fields\n";
+        AST ast;
+        ast.header.ver = "LLM-TOPv1";
+        ast.header.agt = "subagent";
+        ast.header.reqid = "req\"evil"; // a quote that would break the JSON if unescaped
+        ast.diagnostic = "some error";
+
+        FallbackRecoveryManager recovery;
+        auto plan = recovery.analyze_and_recover(ast, "");
+        std::string js = recovery.generate_fallback_json(ast, plan);
+        assert(js.find("req\\\"evil") != std::string::npos); // escaped, not raw
+        std::cout << "Result: PASS\n\n";
+    }
+
     std::cout << "All fallback recovery tests passed!\n";
     std::cout << "Summary: Recovery system successfully handles errors and provides actionable feedback\n";
     return 0;

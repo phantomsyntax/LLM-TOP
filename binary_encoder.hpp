@@ -50,6 +50,9 @@ public:
         OP_TOOL_ARG = 0x21,
         OP_TOOL_METHOD = 0x22,
 
+        // Generic (non-shorthand) statement-level key/value pair
+        OP_KV = 0x23,
+
         // Special
         OP_END_STATEMENT = 0x7E,
         OP_END_MESSAGE = 0x7F,
@@ -88,8 +91,8 @@ public:
 
     // Encode a statement (role + KV pairs + tool calls)
     std::vector<uint8_t> encode_statement(const std::string& role,
-                                         const std::unordered_map<std::string, std::string>& kvpairs,
-                                         const std::vector<std::string>& tool_names = {}) {
+                                         const ordered_map& kvpairs,
+                                         const std::vector<ToolCall>& tools = {}) {
         std::vector<uint8_t> buffer;
 
         // Role
@@ -121,9 +124,15 @@ public:
             }
         }
 
-        // Tool calls (simplified: just names for now)
-        for (const auto& tool : tool_names) {
-            encode_string(buffer, static_cast<uint8_t>(Opcode::OP_TOOL_NAME), tool);
+        // Tool calls: name, optional method, then args in insertion order.
+        for (const auto& tool : tools) {
+            encode_string(buffer, static_cast<uint8_t>(Opcode::OP_TOOL_NAME), tool.name);
+            if (tool.method.has_value()) {
+                encode_string(buffer, static_cast<uint8_t>(Opcode::OP_TOOL_METHOD), tool.method.value());
+            }
+            for (const auto& arg : tool.args) {
+                encode_kvpair(buffer, static_cast<uint8_t>(Opcode::OP_TOOL_ARG), arg.first, arg.second);
+            }
         }
 
         // End of statement marker
@@ -194,22 +203,28 @@ public:
                 ToolCall tc;
                 tc.name = tool_name;
                 stmt.tool_calls.push_back(tc);
-            } 
+            }
+            else if (op == Opcode::OP_TOOL_METHOD) {
+                if (stmt.tool_calls.empty())
+                    throw std::runtime_error("OP_TOOL_METHOD with no preceding tool call");
+                std::string method;
+                pos = decode_string(buffer, pos, method);
+                stmt.tool_calls.back().method = method;
+            }
             else if (op == Opcode::OP_TOOL_ARG) {
-                // Generic KV pair: [key_len][key][val_len][val]
-                pos++; // Consume OP_TOOL_ARG
-                uint32_t key_len = decode_varint(buffer, pos);
-                if (pos + key_len > buffer.size()) throw std::runtime_error("Key buffer underflow");
-                std::string key(reinterpret_cast<const char*>(buffer.data() + pos), key_len);
-                pos += key_len;
-
-                uint32_t val_len = decode_varint(buffer, pos);
-                if (pos + val_len > buffer.size()) throw std::runtime_error("Value buffer underflow");
-                std::string val(reinterpret_cast<const char*>(buffer.data() + pos), val_len);
-                pos += val_len;
-
+                // Belongs to the most recent tool call: [key_len][key][val_len][val]
+                if (stmt.tool_calls.empty())
+                    throw std::runtime_error("OP_TOOL_ARG with no preceding tool call");
+                std::string key, val;
+                decode_kvpair(buffer, pos, key, val);
+                stmt.tool_calls.back().args[key] = val;
+            }
+            else if (op == Opcode::OP_KV) {
+                // Generic statement-level KV pair: [key_len][key][val_len][val]
+                std::string key, val;
+                decode_kvpair(buffer, pos, key, val);
                 stmt.kvpairs[key] = val;
-            } 
+            }
             else {
                 // Predefined statement field opcode: [OPCODE][len][val]
                 std::string key;
@@ -255,7 +270,7 @@ private:
 
     // Decode a varint
     uint32_t decode_varint(const std::vector<uint8_t>& buffer, size_t& pos) {
-        uint32_t value = 0;
+        uint64_t value = 0; // accumulate in 64 bits so a 5th byte cannot silently overflow
         int shift = 0;
         int bytes_read = 0;
         while (pos < buffer.size()) {
@@ -263,12 +278,15 @@ private:
                 throw std::runtime_error("Varint too long (max 5 bytes)");
             }
             uint8_t byte = buffer[pos++];
-            value |= static_cast<uint32_t>(byte & 0x7F) << shift;
+            value |= static_cast<uint64_t>(byte & 0x7F) << shift;
             bytes_read++;
             if ((byte & 0x80) == 0) break;
             shift += 7;
         }
-        return value;
+        if (value > 0xFFFFFFFFULL) {
+            throw std::runtime_error("Varint exceeds 32-bit range");
+        }
+        return static_cast<uint32_t>(value);
     }
 
     // Encode [opcode][length][string_data]
@@ -278,13 +296,34 @@ private:
         buffer.insert(buffer.end(), value.begin(), value.end());
     }
 
-    // Encode generic KV pair: [OP_TOOL_ARG][key_len][key][val_len][val]
-    void encode_generic_kvpair(std::vector<uint8_t>& buffer, const std::string& key, const std::string& value) {
-        buffer.push_back(static_cast<uint8_t>(Opcode::OP_TOOL_ARG));
+    // Encode a length-prefixed key/value pair under the given opcode:
+    // [opcode][key_len][key][val_len][val]
+    void encode_kvpair(std::vector<uint8_t>& buffer, uint8_t opcode,
+                       const std::string& key, const std::string& value) {
+        buffer.push_back(opcode);
         encode_varint(buffer, static_cast<uint32_t>(key.length()));
         buffer.insert(buffer.end(), key.begin(), key.end());
         encode_varint(buffer, static_cast<uint32_t>(value.length()));
         buffer.insert(buffer.end(), value.begin(), value.end());
+    }
+
+    // Generic statement-level KV pair (unknown key with no shorthand opcode).
+    void encode_generic_kvpair(std::vector<uint8_t>& buffer, const std::string& key, const std::string& value) {
+        encode_kvpair(buffer, static_cast<uint8_t>(Opcode::OP_KV), key, value);
+    }
+
+    // Decode a length-prefixed key/value pair; `pos` must point at the opcode byte.
+    void decode_kvpair(const std::vector<uint8_t>& buffer, size_t& pos,
+                       std::string& key, std::string& val) {
+        pos++; // consume opcode
+        uint32_t key_len = decode_varint(buffer, pos);
+        if (pos + key_len > buffer.size()) throw std::runtime_error("Key buffer underflow");
+        key.assign(reinterpret_cast<const char*>(buffer.data() + pos), key_len);
+        pos += key_len;
+        uint32_t val_len = decode_varint(buffer, pos);
+        if (pos + val_len > buffer.size()) throw std::runtime_error("Value buffer underflow");
+        val.assign(reinterpret_cast<const char*>(buffer.data() + pos), val_len);
+        pos += val_len;
     }
 
     // Decode string from [opcode][length][data], advance pos
@@ -305,35 +344,5 @@ private:
     }
 };
 
-// Test binary encoding
-inline void test_binary_encoding() {
-    std::cout << "Testing BinaryEncoder...\n";
-
-    BinaryEncoder encoder;
-
-    // Encode a sample header
-    auto header_binary = encoder.encode_header(
-        "LLM-TOPv1",
-        "sha256:abc123",
-        "test-agent",
-        "user1",
-        "2026-07-18T08:00:00Z",
-        "req-001"
-    );
-
-    std::cout << "Header binary size: " << header_binary.size() << " bytes\n";
-    std::cout << "Header text size: ~80 bytes (estimate)\n";
-    std::cout << "Compression ratio: " << BinaryEncoder::get_compression_ratio(80, header_binary.size()) 
-              << "%\n";
-
-    // Encode a statement
-    std::unordered_map<std::string, std::string> kvpairs;
-    kvpairs["tgt"] = "src/auth.ts:cap=TOKEN;ttl=2026-07-18T09:00:00Z";
-    kvpairs["act"] = "refactor";
-    kvpairs["GL"] = "fix_memory_leak";
-
-    auto stmt_binary = encoder.encode_statement("CODER", kvpairs, {"read", "write"});
-
-    std::cout << "Statement binary size: " << stmt_binary.size() << " bytes\n";
-    std::cout << "[PASS] BinaryEncoder test\n\n";
-}
+// (The standalone test_binary_encoding() demo was removed; test_binary.cpp is the
+//  authoritative test driver for this header.)

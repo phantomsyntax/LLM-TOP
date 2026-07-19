@@ -97,11 +97,11 @@ New test executables:
 - `test_binary` — Binary encoding compression
 - `test_recovery` — Fallback recovery flows
 
-**Build & Run:**
+**Build & Run:** (out-of-source; keeps the tree clean)
 ```bash
-cmake .
-cmake --build .
-ctest -C Debug -V
+cmake -B build
+cmake --build build --config Debug
+ctest --test-dir build -C Debug -V
 ```
 
 ---
@@ -151,26 +151,30 @@ auto binary = encoder.encode_header(...);
 
 ## 8. Real-World Token Measurement & Performance
 
-We evaluated the token savings of LLM-TOP compared to Verbose JSON, Compact JSON (equivalent to native Python `json.dumps` with no spaces), Minimal JSON (using single-character keys), and YAML across 5 diverse, real-world multi-agent payload scenarios:
+Token counts are measured with a **real cl100k_base (tiktoken) BPE tokenizer** (`tokenizer.hpp`, backed by the vendored ranks file `data/cl100k_base.tiktoken`), driven by `benchmarker_real.cpp`, across 7 multi-agent payload scenarios. Baselines are Verbose JSON (pretty-printed), Compact JSON (`json.dumps` with no spaces), Minimal JSON (single-character keys), and YAML:
 
 | Scenario | LLM-TOP | Verbose JSON | Minimal JSON | Compact JSON | YAML |
 |----------|---------|--------------|--------------|--------------|------|
-| **Refactor Request** | 103 | 229 (55%) | 218 (52%) | 229 (55%) | 120 (14%) |
-| **Multi-file Plan** | 140 | 300 (53%) | 289 (51%) | 300 (53%) | 156 (10%) |
-| **Debugging Session** | 102 | 235 (56%) | 223 (54%) | 235 (56%) | 116 (12%) |
-| **Long-context Read** | 78 | 183 (57%) | 174 (55%) | 183 (57%) | 94 (17%) |
-| **Synthetic Large Message** | 184 | 329 (44%) | 317 (41%) | 329 (44%) | 177 (-4%) |
-| **Authenticated Code Reader** | 149 | 253 (41%) | 244 (38%) | 253 (41%) | 164 (9%) |
-| **Pathfinding Executor** | 146 | 250 (41%) | 240 (39%) | 250 (41%) | 161 (9%) |
+| **Refactor Request** | 93 | 203 (54%) | 119 (21%) | 122 (23%) | 134 (30%) |
+| **Multi-file Plan** | 108 | 241 (55%) | 145 (25%) | 148 (27%) | 167 (35%) |
+| **Debugging Session** | 91 | 204 (55%) | 118 (22%) | 121 (24%) | 132 (31%) |
+| **Long-context Read** | 74 | 160 (53%) | 95 (22%) | 98 (24%) | 106 (30%) |
+| **Synthetic Large Message** | 124 | 237 (47%) | 154 (19%) | 157 (21%) | 171 (27%) |
+| **Authenticated Code Reader** | 266 | 353 (24%) | 286 (6%) | 289 (7%) | 298 (10%) |
+| **Pathfinding Executor** | 266 | 354 (24%) | 286 (6%) | 289 (7%) | 300 (11%) |
 
 ### Summary of Savings (Token Reduction by using LLM-TOP):
-- **vs. Verbose JSON:** **53.3%** median reduction (range: 41.1% to 57.4%)
-- **vs. Compact JSON:** **53.3%** median reduction (range: 41.1% to 57.4%)
-- **vs. Minimal JSON:** **51.6%** median reduction (range: 38.9% to 55.2%)
-- **vs. YAML:** **10.3%** median reduction (range: -4.0% to 17.0%)
+- **vs. Verbose JSON:** **53.8%** median reduction (range: 24.6% to 55.4%)
+- **vs. Compact JSON:** **23.8%** median reduction (range: 8.0% to 27.0%)
+- **vs. Minimal JSON:** **21.8%** median reduction (range: 7.0% to 25.5%)
+- **vs. YAML:** **30.2%** median reduction (range: 10.7% to 35.3%)
+
+**Interpretation.** The large ~54% figure applies only to *pretty-printed* JSON; against a realistic **minified JSON** baseline the reduction is **~22–24%**. The last two scenarios embed a long capability (JWT) token that LLM-TOP repeats in both the pointer and the tool call, collapsing its advantage to ~6–7% — a reminder that the win comes from dropping *structural* punctuation, not from encoding large opaque values.
+
+> **Correction.** Versions of this table before 2026-07-19 were produced by a hand-rolled token *estimator* (`estimateTokens`) that counted every punctuation character as its own token. That inflated the reduction over compact/minimal JSON to a uniform ~53% (and even reported YAML as low as −4%). Those numbers are retired; the table above is the real-tokenizer re-measurement the [analysis](../LLM-TOP_analysis.md) §4.1 called for.
 
 ---
 
-**Updated:** 2026-07-18
+**Updated:** 2026-07-19
 **Version:** 1.1
 **Status:** Backward-compatible

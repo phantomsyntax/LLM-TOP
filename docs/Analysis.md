@@ -27,6 +27,6 @@ If a subagent completely mangles the syntax, the parser's `TOLERANT` mode absorb
 
 ## Real-World Implementation Results
 The C++ implementation of this spec is complete and integrated via CMake.
-- **Token Efficiency**: Benchmark heuristics confirm an average of **~60% token reduction** over equivalent JSON payloads.
+- **Token Efficiency**: Measured with a real cl100k_base (tiktoken) tokenizer, LLM-TOP reduces tokens by **~22–24% vs minified JSON** and up to ~54% vs pretty-printed JSON (see README). The earlier "~60%" figure came from a punctuation-counting heuristic and has been retired.
 - **Robustness**: 1,000 iterations of fuzzed token mutilation resulted in **0 unhandled exceptions or segfaults**.
 - **Multi-Agent Fidelity**: Extremely abstract algorithmic goals (`GL:AStar_pathfind`) are successfully expanded by the decoder agent into fully functional C++ files without conversational context.

@@ -1,6 +1,6 @@
 # LLM-TOP (LLM Token-Optimized Protocol)
 
-LLM-TOP is an ultra-dense, token-optimized protocol layer designed specifically for multi-agent LLM orchestration. By stripping away grammatical English and conversational filler in favor of strict, structured key-value markers, LLM-TOP achieves **~53% token reduction** while maintaining perfect semantic fidelity and execution capability.
+LLM-TOP is an ultra-dense, token-optimized protocol layer designed specifically for multi-agent LLM orchestration. By stripping away grammatical English and conversational filler in favor of strict, structured key-value markers, LLM-TOP trims tokens by **~22–24% versus minified JSON** (and up to **~54% versus pretty-printed JSON**), measured with a real cl100k_base (tiktoken) tokenizer, while preserving structured, executable semantics. See [Performance & Benchmarks](#performance--benchmarks) for the full, baseline-by-baseline breakdown.
 
 ## Features
 1. **Token Efficiency**: Compresses instructions down to raw semantic markers (`tgt:`, `act:`, `GL:`, `TD:`).
@@ -24,20 +24,27 @@ This repository contains the native C++ tooling required to integrate the protoc
 
 ## Building and Testing
 
-Built out-of-the-box using standard CMake:
+Built out-of-the-box using standard CMake. Use an **out-of-source** build directory — it keeps the source tree clean and `build*/` is already git-ignored:
 
 ```bash
-cmake .
-cmake --build .
-ctest -C Debug -V
+cmake -B build
+cmake --build build --config Debug
+ctest --test-dir build -C Debug -V
 ```
 
 ## Performance & Benchmarks
-Based on token counts from 7 real-world multi-agent payload scenarios, LLM-TOP provides substantial token savings compared to alternative formats:
-- **vs. Verbose JSON:** **53.3%** median token reduction (range: 41.1% to 57.4%)
-- **vs. Compact JSON:** **53.3%** median token reduction (range: 41.1% to 57.4%)
-- **vs. Minimal JSON:** **51.6%** median token reduction (range: 38.9% to 55.2%)
-- **vs. YAML:** **10.3%** median token reduction (range: -4.0% to 17.0%)
+Token counts are measured with a **real cl100k_base (tiktoken) BPE tokenizer** — the vendored ranks file at `data/cl100k_base.tiktoken`, driven by `benchmarker_real.cpp` (`ctest` target `benchmark`) — across 7 multi-agent payload scenarios. Savings depend heavily on which JSON baseline you compare against:
+
+| Baseline | Median token reduction | Range |
+|----------|------------------------|-------|
+| Pretty-printed / verbose JSON | **53.8%** | 24.6% – 55.4% |
+| Compact JSON (`json.dumps`, no spaces) | **23.8%** | 8.0% – 27.0% |
+| Minimal JSON (single-character keys) | **21.8%** | 7.0% – 25.5% |
+| YAML | **30.2%** | 10.7% – 35.3% |
+
+**Read this honestly:** the headline ~54% only holds against *pretty-printed* JSON, whose indentation and structural punctuation you would never pay for on the wire. Against a **minified JSON** baseline — the realistic comparison — the reduction is **~22–24%**. In the two scenarios that embed a long capability (JWT) token, LLM-TOP repeats that token in both the pointer and the tool call, so its advantage shrinks to ~7% (per-scenario table in `IMPROVEMENTS.md`).
+
+> **Note on earlier figures.** Prior revisions quoted ~53% across every baseline. That came from a hand-rolled token *estimator* that counted each punctuation character as its own token — over-counting exactly the structural punctuation JSON has most of, and inflating the advantage over compact/minimal JSON by roughly 2×. Every number above is re-measured with the real tokenizer.
 
 ## Why LLM-TOP?
 During simulated multi-agent stress tests (Phase 3), we passed highly complex requirements (such as "Implement an A* pathfinding algorithm using a Manhattan distance heuristic") strictly using LLM-TOP shorthands (`GL:AStar_pathfind TD:heur=manhattan`). 

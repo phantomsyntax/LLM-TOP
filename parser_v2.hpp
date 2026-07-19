@@ -136,6 +136,7 @@ struct AST {
     std::vector<Statement> healed_draft;
     std::string diagnostic;
     bool recovery_attempted = false;
+    std::string raw_body; // payload bytes after the header line, for CHK integrity verification
 };
 
 // escapeJson removed — use escape_json() from json_utils.hpp
@@ -146,6 +147,12 @@ inline std::string toJson(const AST& ast) {
     js.reserve(est_size);
     js += "{\n  \"version\": \"" + escape_json(ast.header.ver) + "\",\n";
     js += "  \"checksum\": \"" + escape_json(ast.header.chk) + "\",\n";
+    js += "  \"agent\": \"" + escape_json(ast.header.agt) + "\",\n";
+    js += "  \"uid\": \"" + escape_json(ast.header.uid) + "\",\n";
+    js += "  \"time\": \"" + escape_json(ast.header.tim) + "\",\n";
+    js += "  \"reqid\": \"" + escape_json(ast.header.reqid) + "\",\n";
+    js += "  \"fallback\": \"" + escape_json(ast.header.fallback) + "\",\n";
+    js += "  \"hr\": " + std::to_string(ast.header.hr) + ",\n";
     if (!ast.diagnostic.empty()) js += "  \"diagnostic\": \"" + escape_json(ast.diagnostic) + "\",\n";
     if (ast.recovery_attempted) js += "  \"recovery_attempted\": true,\n";
     js += "  \"statements\": [\n";
@@ -191,6 +198,9 @@ public:
             handleError(ast, "Payload size exceeds maximum allowed limit");
             return ast;
         }
+        // Capture the body (everything after the first line) so the CHK header can be verified.
+        size_t first_nl = payload.find('\n');
+        ast.raw_body = (first_nl == std::string::npos) ? std::string("") : payload.substr(first_nl + 1);
         std::istringstream stream(payload);
         std::string line;
 
