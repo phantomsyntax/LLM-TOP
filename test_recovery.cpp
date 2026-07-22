@@ -1,5 +1,5 @@
 #include <iostream>
-#include <cassert>
+#include "test_harness.hpp"
 #include "fallback_recovery.hpp"
 
 int main() {
@@ -22,8 +22,8 @@ int main() {
         FallbackRecoveryManager recovery;
         auto plan = recovery.analyze_and_recover(ast);
 
-        assert(plan.action == FallbackRecoveryManager::RecoveryAction::NO_ERROR);
-        assert(plan.errors_found == 0);
+        CHECK_EQ(plan.action, FallbackRecoveryManager::RecoveryAction::NO_ERROR);
+        CHECK_EQ(plan.errors_found, 0);
         
         std::cout << "Result: PASS\n\n";
     }
@@ -46,19 +46,19 @@ int main() {
         FallbackRecoveryManager recovery;
         auto plan = recovery.analyze_and_recover(ast, "VER:... [INCOMPLETE");
 
-        assert(plan.action == FallbackRecoveryManager::RecoveryAction::REPARSE_SUGGESTED);
-        assert(plan.errors_found > 0);
-        assert(plan.statements_recovered > 0);
-        assert(!plan.recovery_instruction.empty());
+        CHECK_EQ(plan.action, FallbackRecoveryManager::RecoveryAction::REPARSE_SUGGESTED);
+        CHECK(plan.errors_found > 0);
+        CHECK(plan.statements_recovered > 0);
+        CHECK(!plan.recovery_instruction.empty());
         
         std::cout << "Errors found: " << plan.errors_found << "\n";
         std::cout << "Statements recovered: " << plan.statements_recovered << "\n";
         std::cout << "Recovery instruction generated: YES\n";
         
         // Verify recovery instruction format
-        assert(plan.recovery_instruction.find("VER:LLM-TOPv1") != std::string::npos);
-        assert(plan.recovery_instruction.find("[PLANNER]") != std::string::npos);
-        assert(plan.recovery_instruction.find("act:repair") != std::string::npos);
+        CHECK_CONTAINS(plan.recovery_instruction, "VER:LLM-TOPv1");
+        CHECK_CONTAINS(plan.recovery_instruction, "[PLANNER]");
+        CHECK_CONTAINS(plan.recovery_instruction, "act:repair");
 
         std::cout << "Result: PASS\n\n";
     }
@@ -75,17 +75,17 @@ int main() {
         FallbackRecoveryManager recovery;
         auto plan = recovery.analyze_and_recover(ast, "");
 
-        assert(plan.action == FallbackRecoveryManager::RecoveryAction::COMPLETE_FAILURE);
-        assert(plan.errors_found > 0);
-        assert(!plan.fallback_json.empty());
+        CHECK_EQ(plan.action, FallbackRecoveryManager::RecoveryAction::COMPLETE_FAILURE);
+        CHECK(plan.errors_found > 0);
+        CHECK(!plan.fallback_json.empty());
         
         std::cout << "Fallback JSON generated: YES\n";
         std::cout << "JSON size: " << plan.fallback_json.length() << " bytes\n";
 
         // Verify fallback JSON structure
-        assert(plan.fallback_json.find("\"type\": \"FALLBACK\"") != std::string::npos);
-        assert(plan.fallback_json.find("\"recovery_status\": \"complete_failure\"") != std::string::npos);
-        assert(plan.fallback_json.find("\"support_link\"") != std::string::npos);
+        CHECK_CONTAINS(plan.fallback_json, "\"type\": \"FALLBACK\"");
+        CHECK_CONTAINS(plan.fallback_json, "\"recovery_status\": \"complete_failure\"");
+        CHECK_CONTAINS(plan.fallback_json, "\"support_link\"");
 
         std::cout << "Result: PASS\n\n";
     }
@@ -107,12 +107,12 @@ int main() {
         FallbackRecoveryManager recovery;
         auto plan = recovery.analyze_and_recover(ast, "VER:... tgt=src/main");
 
-        assert(!plan.recovery_instruction.empty());
+        CHECK(!plan.recovery_instruction.empty());
         
         // Check for hints
-        assert(plan.recovery_instruction.find("RECOVERY_HINTS") != std::string::npos);
-        assert(plan.recovery_instruction.find("unclosed quotes") != std::string::npos);
-        assert(plan.recovery_instruction.find("escape sequences") != std::string::npos);
+        CHECK_CONTAINS(plan.recovery_instruction, "RECOVERY_HINTS");
+        CHECK_CONTAINS(plan.recovery_instruction, "unclosed quotes");
+        CHECK_CONTAINS(plan.recovery_instruction, "escape sequences");
 
         std::cout << "Debugging hints included: YES\n";
         std::cout << "Result: PASS\n\n";
@@ -139,15 +139,15 @@ int main() {
         FallbackRecoveryManager recovery;
         auto plan = recovery.analyze_and_recover(ast);
 
-        assert(plan.statements_recovered == 2);
+        CHECK_EQ(plan.statements_recovered, 2);
 
         // Generate fallback JSON
         std::string fallback_json = recovery.generate_fallback_json(ast, plan);
         
         // Verify it includes recovered statements
-        assert(fallback_json.find("\"recovered_statements\"") != std::string::npos);
-        assert(fallback_json.find("src/file0.cpp") != std::string::npos);
-        assert(fallback_json.find("src/file1.cpp") != std::string::npos);
+        CHECK_CONTAINS(fallback_json, "\"recovered_statements\"");
+        CHECK_CONTAINS(fallback_json, "src/file0.cpp");
+        CHECK_CONTAINS(fallback_json, "src/file1.cpp");
 
         std::cout << "Recovered statements preserved in JSON: YES\n";
         std::cout << "Result: PASS\n\n";
@@ -169,7 +169,7 @@ int main() {
 
         FallbackRecoveryManager recovery;
         auto plan = recovery.analyze_and_recover(ast, "payload");
-        assert(plan.errors_found == 3);
+        CHECK_EQ(plan.errors_found, 3);
         std::cout << "Result: PASS\n\n";
     }
 
@@ -185,11 +185,11 @@ int main() {
         FallbackRecoveryManager recovery;
         auto plan = recovery.analyze_and_recover(ast, "");
         std::string js = recovery.generate_fallback_json(ast, plan);
-        assert(js.find("req\\\"evil") != std::string::npos); // escaped, not raw
+        CHECK_CONTAINS(js, "req\\\"evil"); // escaped, not raw
         std::cout << "Result: PASS\n\n";
     }
 
     std::cout << "All fallback recovery tests passed!\n";
     std::cout << "Summary: Recovery system successfully handles errors and provides actionable feedback\n";
-    return 0;
+    return TEST_SUMMARY("recovery_tests");
 }

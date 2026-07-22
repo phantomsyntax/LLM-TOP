@@ -3,7 +3,6 @@
 #include <iostream>
 #include <string>
 #include <vector>
-#include <cassert>
 
 // Schema validation for LLM-TOP payloads
 // Ensures messages conform to expected structure and semantics
@@ -205,48 +204,3 @@ private:
         return true;
     }
 };
-
-// Test the schema validator
-inline void test_schema_validator() {
-    std::cout << "Testing SchemaValidator...\n";
-
-    // Create a valid AST
-    AST valid_ast;
-    valid_ast.header.ver = "LLM-TOPv1";
-    valid_ast.header.agt = "test-agent";
-    valid_ast.header.reqid = "req-001";
-
-    Statement stmt;
-    stmt.role = "CODER";
-    stmt.kvpairs["tgt"] = "src/main.cpp:cap=TOKEN123;ttl=2026-07-18T10:00:00Z";
-    stmt.kvpairs["act"] = "refactor";
-    stmt.kvpairs["GL"] = "fix_memory_leak";
-
-    ToolCall tool;
-    tool.name = "read";
-    tool.args["path"] = "src/main.cpp";
-    stmt.tool_calls.push_back(tool);
-
-    valid_ast.statements.push_back(stmt);
-
-    // Validate
-    SchemaValidator validator;
-    auto result = validator.validate(valid_ast);
-
-    std::cout << "Valid AST: " << (result.valid ? "PASS" : "FAIL") << "\n";
-    if (!result.errors.empty()) {
-        std::cout << "Errors:\n";
-        for (const auto& err : result.errors) {
-            std::cout << "  - " << err << "\n";
-        }
-    }
-    if (!result.warnings.empty()) {
-        std::cout << "Warnings:\n";
-        for (const auto& warn : result.warnings) {
-            std::cout << "  - " << warn << "\n";
-        }
-    }
-
-    assert(result.valid);
-    std::cout << "[PASS] SchemaValidator test\n\n";
-}

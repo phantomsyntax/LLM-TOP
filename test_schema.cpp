@@ -1,5 +1,5 @@
 #include <iostream>
-#include <cassert>
+#include "test_harness.hpp"
 #include "schema_validator.hpp"
 
 int main() {
@@ -29,7 +29,7 @@ int main() {
         SchemaValidator validator;
         auto result = validator.validate(ast);
 
-        assert(result.valid);
+        CHECK(result.valid);
         std::cout << "Result: PASS\n\n";
     }
 
@@ -52,8 +52,8 @@ int main() {
         SchemaValidator validator;
         auto result = validator.validate(ast);
 
-        assert(!result.valid);
-        assert(!result.errors.empty());
+        CHECK(!result.valid);
+        CHECK(!result.errors.empty());
         std::cout << "Errors detected: " << result.errors.size() << "\n";
         std::cout << "Result: PASS (correctly rejected)\n\n";
     }
@@ -75,8 +75,8 @@ int main() {
         SchemaValidator validator;
         auto result = validator.validate(ast);
 
-        assert(result.valid);  // Should still be valid (extensibility)
-        assert(!result.warnings.empty());
+        CHECK(result.valid);  // Should still be valid (extensibility)
+        CHECK(!result.warnings.empty());
         std::cout << "Warnings detected: " << result.warnings.size() << "\n";
         std::cout << "Result: PASS (allowed with warning)\n\n";
     }
@@ -100,7 +100,7 @@ int main() {
         SchemaValidator validator;
         auto result = validator.validate(ast);
 
-        assert(!result.warnings.empty());
+        CHECK(!result.warnings.empty());
         std::cout << "Warnings detected: " << result.warnings.size() << "\n";
         std::cout << "Result: PASS (warning issued)\n\n";
     }
@@ -131,10 +131,10 @@ int main() {
         SchemaValidator validator;
         auto result = validator.validate(ast);
 
-        assert(result.valid);
+        CHECK(result.valid);
         std::cout << "Result: PASS\n\n";
     }
 
     std::cout << "All schema validator tests passed!\n";
-    return 0;
+    return TEST_SUMMARY("schema_tests");
 }

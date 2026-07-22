@@ -1,5 +1,5 @@
 #include <iostream>
-#include <cassert>
+#include "test_harness.hpp"
 #include <vector>
 #include <string>
 #include "tokenizer.hpp"
@@ -21,40 +21,40 @@ int main() {
     // Test 1: a single word encodes to its known cl100k id
     {
         auto ids = tok.encode("hello");
-        assert(ids.size() == 1);
-        assert(ids[0] == 15339);
+        CHECK_EQ(ids.size(), 1);
+        CHECK_EQ(ids[0], 15339);
         std::cout << "[TEST 1] 'hello' -> [15339] PASS\n";
     }
 
     // Test 2: two words; the space between them attaches to the following word
     {
         auto ids = tok.encode("hello world");
-        assert(ids.size() == 2);
-        assert(ids[0] == 15339);
-        assert(ids[1] == 1917);
+        CHECK_EQ(ids.size(), 2);
+        CHECK_EQ(ids[0], 15339);
+        CHECK_EQ(ids[1], 1917);
         std::cout << "[TEST 2] 'hello world' -> [15339, 1917] PASS\n";
     }
 
     // Test 3: a leading space is part of the same pre-token as the word
     {
         auto ids = tok.encode(" hello");
-        assert(ids.size() == 1);
-        assert(ids[0] == 24748);
+        CHECK_EQ(ids.size(), 1);
+        CHECK_EQ(ids[0], 24748);
         std::cout << "[TEST 3] ' hello' -> [24748] PASS\n";
     }
 
     // Test 4: empty input produces no tokens
     {
         auto ids = tok.encode("");
-        assert(ids.empty());
+        CHECK(ids.empty());
         std::cout << "[TEST 4] '' -> [] PASS\n";
     }
 
     // Test 5: count() is consistent with encode() and non-zero for real payloads
     {
         std::string s = "VER:LLM-TOPv1 act:refactor GL:fix_leak";
-        assert(tok.count(s) == tok.encode(s).size());
-        assert(tok.count(s) > 0);
+        CHECK_EQ(tok.count(s), tok.encode(s).size());
+        CHECK(tok.count(s) > 0);
         std::cout << "[TEST 5] count() == encode().size() PASS\n";
     }
 
@@ -64,10 +64,10 @@ int main() {
     {
         auto ids = tok.encode("tiktoken is great!");
         std::vector<int> expected = {83, 1609, 5963, 374, 2294, 0};
-        assert(ids == expected);
+        CHECK_EQ(ids, expected);
         std::cout << "[TEST 6] 'tiktoken is great!' -> [83,1609,5963,374,2294,0] PASS\n";
     }
 
     std::cout << "\nAll tokenizer tests passed!\n";
-    return 0;
+    return TEST_SUMMARY("tokenizer_tests");
 }

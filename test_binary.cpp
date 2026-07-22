@@ -1,5 +1,5 @@
 #include <iostream>
-#include <cassert>
+#include "test_harness.hpp"
 #include <cstring>
 #include <vector>
 #include "binary_encoder.hpp"
@@ -37,12 +37,12 @@ int main() {
         std::cout << "Binary size: " << header_binary.size() << " bytes\n";
         std::cout << "Compression: " << compression << "%\n";
 
-        assert(compression > 0.0f);
-        assert(header_binary.size() > 0);
-        assert(header_binary[0] == 0x4C);
-        assert(header_binary[1] == 0x4C);
-        assert(header_binary[2] == 0x4D);
-        assert(header_binary[3] == 0x54);
+        CHECK(compression > 0.0f);
+        CHECK(header_binary.size() > 0);
+        CHECK_EQ(header_binary[0], 0x4C);
+        CHECK_EQ(header_binary[1], 0x4C);
+        CHECK_EQ(header_binary[2], 0x4D);
+        CHECK_EQ(header_binary[3], 0x54);
 
         std::cout << "Result: PASS\n\n";
     }
@@ -72,8 +72,8 @@ int main() {
         std::cout << "Binary size: " << stmt_binary.size() << " bytes\n";
         std::cout << "Compression: " << compression << "%\n";
 
-        assert(stmt_binary.size() > 0);
-        assert(compression > 0.0f);
+        CHECK(stmt_binary.size() > 0);
+        CHECK(compression > 0.0f);
 
         std::cout << "Result: PASS\n\n";
     }
@@ -97,8 +97,8 @@ int main() {
         std::cout << "Batch size (5 statements): " << batch.size() << " bytes\n";
         std::cout << "Average per statement: " << (batch.size() / 5) << " bytes\n";
 
-        assert(batch.size() > 0);
-        assert(batch.size() < 500);
+        CHECK(batch.size() > 0);
+        CHECK(batch.size() < 500);
 
         std::cout << "Result: PASS\n\n";
     }
@@ -111,8 +111,8 @@ int main() {
         auto small = encoder.encode_header("v1", "a", "b", "c", "d", "e");
         std::string text_equiv = "VER:v1 CHK:a AGT:b UID:c TIM:d REQID:e";
 
-        assert(small.size() > 0);
-        assert(small.size() < text_equiv.length());
+        CHECK(small.size() > 0);
+        CHECK(small.size() < text_equiv.length());
 
         std::cout << "Small header encoded size: ~" << small.size() << " bytes\n";
         std::cout << "Text equivalent size: " << text_equiv.length() << " bytes\n";
@@ -142,8 +142,8 @@ int main() {
         std::cout << "Binary size: " << stmt_binary.size() << " bytes\n";
         std::cout << "Compression: " << compression << "%\n";
 
-        assert(stmt_binary.size() > 0);
-        assert(compression > 15.0f);
+        CHECK(stmt_binary.size() > 0);
+        CHECK(compression > 15.0f);
 
         std::cout << "Result: PASS\n\n";
     }
@@ -183,36 +183,36 @@ int main() {
         Statement decoded = encoder.decode_statement(binary, pos);
 
         // Role + values
-        assert(decoded.role == "CODER");
-        assert(decoded.kvpairs.at("GL") == "fix_leak");
-        assert(decoded.kvpairs.at("tgt") == "src/auth.ts");
-        assert(decoded.kvpairs.at("act") == "refactor");
-        assert(decoded.kvpairs.at("err") == "missing_dependency");
-        assert(decoded.kvpairs.at("custom_key") == "custom_value");
+        CHECK_EQ(decoded.role, "CODER");
+        CHECK_EQ(decoded.kvpairs.at("GL"), "fix_leak");
+        CHECK_EQ(decoded.kvpairs.at("tgt"), "src/auth.ts");
+        CHECK_EQ(decoded.kvpairs.at("act"), "refactor");
+        CHECK_EQ(decoded.kvpairs.at("err"), "missing_dependency");
+        CHECK_EQ(decoded.kvpairs.at("custom_key"), "custom_value");
 
         // Key ORDER must match the original insertion order exactly.
         std::vector<std::string> got_order;
         for (const auto& p : decoded.kvpairs) got_order.push_back(p.first);
         std::vector<std::string> want_order = {"GL", "tgt", "act", "err", "custom_key"};
-        assert(got_order == want_order);
+        CHECK_EQ(got_order, want_order);
 
         // Tool calls: names, args (with their own order), and method.
-        assert(decoded.tool_calls.size() == 2);
+        CHECK_EQ(decoded.tool_calls.size(), 2);
 
-        assert(decoded.tool_calls[0].name == "read");
-        assert(decoded.tool_calls[0].args.at("path") == "src/auth.ts");
-        assert(!decoded.tool_calls[0].method.has_value());
+        CHECK_EQ(decoded.tool_calls[0].name, "read");
+        CHECK_EQ(decoded.tool_calls[0].args.at("path"), "src/auth.ts");
+        CHECK(!decoded.tool_calls[0].method.has_value());
 
-        assert(decoded.tool_calls[1].name == "write");
-        assert(decoded.tool_calls[1].method.has_value());
-        assert(decoded.tool_calls[1].method.value() == "commit");
-        assert(decoded.tool_calls[1].args.at("path") == "src/auth.ts");
-        assert(decoded.tool_calls[1].args.at("content") == "new validation code");
+        CHECK_EQ(decoded.tool_calls[1].name, "write");
+        CHECK(decoded.tool_calls[1].method.has_value());
+        CHECK_EQ(decoded.tool_calls[1].method.value(), "commit");
+        CHECK_EQ(decoded.tool_calls[1].args.at("path"), "src/auth.ts");
+        CHECK_EQ(decoded.tool_calls[1].args.at("content"), "new validation code");
 
         std::vector<std::string> arg_order;
         for (const auto& p : decoded.tool_calls[1].args) arg_order.push_back(p.first);
         std::vector<std::string> want_arg_order = {"path", "content"};
-        assert(arg_order == want_arg_order);
+        CHECK_EQ(arg_order, want_arg_order);
 
         std::cout << "Result: PASS (order + args + method round-trip)\n\n";
     }
@@ -235,7 +235,7 @@ int main() {
             std::string msg = e.what();
             if (msg.find("Varint too long") != std::string::npos) caught = true;
         }
-        assert(caught);
+        CHECK(caught);
         std::cout << "Result: PASS (Successfully rejected malicious varint)\n\n";
     }
 
@@ -251,10 +251,10 @@ int main() {
         } catch (const std::runtime_error&) {
             caught = true;
         }
-        assert(caught);
+        CHECK(caught);
         std::cout << "Result: PASS (Successfully rejected overflowing varint)\n\n";
     }
 
     std::cout << "All binary encoder tests passed!\n";
-    return 0;
+    return TEST_SUMMARY("binary_tests");
 }

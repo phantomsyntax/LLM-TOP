@@ -33,7 +33,6 @@ build*/
 
 # Local mock tests
 MockProject/
-LLM_Mock/
 
 # Python
 __pycache__/

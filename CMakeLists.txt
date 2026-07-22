@@ -1,8 +1,17 @@
 cmake_minimum_required(VERSION 3.10)
 project(LLM-TOP VERSION 1.1)
 
-set(CMAKE_CXX_STANDARD 17)
+# C++20 is required for heterogeneous lookup on unordered_map (used by the
+# tokenizer's hot merge loop) and matches what the README documents.
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
+
+# Single-config generators leave CMAKE_BUILD_TYPE empty, which silently means
+# "no optimization and no NDEBUG". Choose explicitly so behavior is predictable.
+get_property(_is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(NOT _is_multi_config AND NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
+endif()
 
 # Core parser is header-only:
 #   - parser_v2.hpp: Enhanced lexer with escape sequence support
@@ -23,6 +32,7 @@ add_executable(benchmarker benchmarker.cpp)
 add_executable(benchmarker_real benchmarker_real.cpp)
 add_executable(fuzzer fuzzer.cpp)
 add_executable(test_tokenizer test_tokenizer.cpp)
+add_executable(test_harness_selftest test_harness_selftest.cpp)
 
 # The real BPE tokenizer needs the vendored cl100k_base ranks file. Pass its
 # absolute path in at compile time so the targets can be run from any directory.
@@ -42,14 +52,15 @@ add_test(NAME middleware_tests COMMAND test_middleware)
 add_test(NAME schema_tests COMMAND test_schema)
 add_test(NAME binary_tests COMMAND test_binary)
 add_test(NAME recovery_tests COMMAND test_recovery)
-# Runs from the source dir so the fixture path "../LLM_Mock/..." resolves the same
-# way regardless of where the build tree lives (in-source or out-of-source).
-add_test(NAME integration_tests COMMAND test_integration
-         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME integration_tests COMMAND test_integration)
 add_test(NAME tokenizer_tests COMMAND test_tokenizer)
+
+# Guards the regression that motivated test_harness.hpp: proves CHECK is not
+# compiled out under NDEBUG the way assert() was.
+add_test(NAME harness_selftest COMMAND test_harness_selftest)
 
 # Stability tests
 add_test(NAME fuzz_tests COMMAND fuzzer)
 
-# Optional: benchmark tests
-add_test(NAME benchmark COMMAND benchmarker)
+# benchmarker and benchmarker_real are build targets, not tests: they measure
+# and report, they do not assert. Run them directly.

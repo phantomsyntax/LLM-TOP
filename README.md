@@ -40,10 +40,19 @@ Built out-of-the-box using standard CMake with standard C++20 toolchains (MSVC /
 ```bash
 cmake -B build
 cmake --build build --config Debug
-ctest --test-dir build -C Debug -V
+ctest --test-dir build -C Debug --output-on-failure
 ```
 
-To run all native test executables directly:
+The suite is also expected to pass in Release. Test assertions are ordinary
+function calls (`test_harness.hpp`), not `assert()`, so they are **not** compiled
+out under `NDEBUG` and a Release run verifies the same conditions as Debug:
+
+```bash
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
+To run individual test executables directly:
 
 ```bash
 .\build\Debug\test_runner.exe
@@ -51,8 +60,11 @@ To run all native test executables directly:
 .\build\Debug\test_binary.exe
 .\build\Debug\test_tokenizer.exe
 .\build\Debug\test_integration.exe
-.\build\Debug\fuzzer.exe 2000
+.\build\Debug\fuzzer.exe
 ```
+
+`benchmarker` and `benchmarker_real` are build targets rather than tests — they
+measure and report, they do not assert. Run them directly.
 
 ---
 

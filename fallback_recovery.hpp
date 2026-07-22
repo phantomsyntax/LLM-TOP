@@ -7,7 +7,6 @@
 #include <vector>
 #include <sstream>
 #include <ctime>
-#include <cassert>
 
 // Fallback Recovery System for LLM-TOP
 // When a payload is corrupted or malformed, this system:
@@ -230,30 +229,3 @@ private:
 
 
 };
-
-// Test the recovery system
-inline void test_fallback_recovery() {
-    std::cout << "Testing FallbackRecoveryManager...\n";
-
-    // Create an AST with diagnostics (simulating a parse error)
-    AST ast;
-    ast.header.ver = "LLM-TOPv1";
-    ast.header.agt = "subagent-1";
-    ast.header.reqid = "req-123";
-    ast.diagnostic = "Malformed role declaration: [INCOMPLETE";
-
-    Statement stmt;
-    stmt.role = "CODER";
-    stmt.kvpairs["tgt"] = "src/main.cpp";
-    stmt.kvpairs["act"] = "refactor";
-    ast.statements.push_back(stmt);
-
-    FallbackRecoveryManager recovery;
-    auto plan = recovery.analyze_and_recover(ast, "VER:... [INCOMPLETE");
-
-    recovery.print_recovery_plan(plan);
-
-    assert(plan.errors_found > 0);
-    assert(plan.recovery_instruction.find("PLANNER") != std::string::npos);
-    std::cout << "[PASS] FallbackRecoveryManager test\n\n";
-}

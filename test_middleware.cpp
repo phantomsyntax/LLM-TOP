@@ -1,27 +1,13 @@
 #include <iostream>
-#include <cassert>
+#include "test_harness.hpp"
 #include "parser_v2.hpp"
 #include "middleware.hpp"
+#include "test_support.hpp"
 
 // Shared secret for all test JWTs
-static const std::string TEST_SECRET = "llm-top-test-secret-key-2026";
+using llmtop_test::fix_chk;
+static const std::string TEST_SECRET = llmtop_test::kTestSecret;
 
-// Test helper: rewrite the CHK digest with a correct sha256 over the payload body
-// (everything after the first newline), so payloads satisfy integrity enforcement.
-static std::string fix_chk(std::string payload) {
-    size_t nl = payload.find('\n');
-    std::string body = (nl == std::string::npos) ? std::string("") : payload.substr(nl + 1);
-    std::string real = SHA256::hash_hex(body);
-    const std::string marker = "CHK:sha256:";
-    size_t p = payload.find(marker);
-    if (p != std::string::npos) {
-        size_t start = p + marker.size();
-        size_t end = payload.find(' ', start);
-        if (end == std::string::npos) end = (nl == std::string::npos ? payload.size() : nl);
-        payload.replace(start, end - start, real);
-    }
-    return payload;
-}
 
 void test_middleware_valid_auth() {
     // Create a validator with the test secret
@@ -45,8 +31,8 @@ void test_middleware_valid_auth() {
     if (!plan.authorized) {
         std::cerr << "Error message: " << plan.error_message << std::endl;
     }
-    assert(plan.authorized == true);
-    assert(plan.approved_actions.size() == 2);
+    CHECK(plan.authorized);
+    CHECK_EQ(plan.approved_actions.size(), 2);
     std::cout << "[PASS] test_middleware_valid_auth\n";
 }
 
@@ -66,8 +52,8 @@ void test_middleware_expired_token() {
     LLMTOPMiddleware middleware(validator);
     auto plan = middleware.evaluate(ast);
 
-    assert(plan.authorized == false);
-    assert(plan.error_message.find("ERR:cap_invalid_or_expired") != std::string::npos);
+    CHECK(!(plan.authorized));
+    CHECK_CONTAINS(plan.error_message, "ERR:cap_invalid_or_expired");
     std::cout << "[PASS] test_middleware_expired_token\n";
 }
 
@@ -88,8 +74,8 @@ void test_middleware_invalid_signature() {
     LLMTOPMiddleware middleware(validator);
     auto plan = middleware.evaluate(ast);
 
-    assert(plan.authorized == false);
-    assert(plan.error_message.find("ERR:exec - Unauthorized tool call") != std::string::npos);
+    CHECK(!(plan.authorized));
+    CHECK_CONTAINS(plan.error_message, "ERR:exec - Unauthorized tool call");
     std::cout << "[PASS] test_middleware_invalid_signature\n";
 }
 
@@ -117,7 +103,7 @@ void test_middleware_tampered_payload() {
     LLMTOPMiddleware middleware(validator);
     auto plan = middleware.evaluate(ast);
 
-    assert(plan.authorized == false);
+    CHECK(!(plan.authorized));
     std::cout << "[PASS] test_middleware_tampered_payload\n";
 }
 
@@ -132,8 +118,8 @@ void test_middleware_no_agent() {
     LLMTOPMiddleware middleware(validator);
     auto plan = middleware.evaluate(ast);
 
-    assert(plan.authorized == false);
-    assert(plan.error_message.find("ERR:auth_rejected") != std::string::npos);
+    CHECK(!(plan.authorized));
+    CHECK_CONTAINS(plan.error_message, "ERR:auth_rejected");
     std::cout << "[PASS] test_middleware_no_agent\n";
 }
 
@@ -153,7 +139,7 @@ void test_base64url_roundtrip() {
             for (char c : decoded) std::cerr << std::hex << (static_cast<int>(c) & 0xFF) << " ";
             std::cerr << "\n";
         }
-        assert(decoded == original);
+        CHECK_EQ(decoded, original);
     }
     std::cout << "[PASS] test_base64url_roundtrip\n";
 }
@@ -176,13 +162,13 @@ void test_security_hardening() {
         // Default-on sub == agent_id check
         LLMTOPMiddleware middleware(validator, false); // allow_delegation = false
         auto plan = middleware.evaluate(ast);
-        assert(plan.authorized == false);
-        assert(plan.error_message.find("Unauthorized tool call") != std::string::npos);
+        CHECK(!(plan.authorized));
+        CHECK_CONTAINS(plan.error_message, "Unauthorized tool call");
 
         // Opt-out (allow_delegation = true)
         LLMTOPMiddleware middleware_del(validator, true);
         auto plan_del = middleware_del.evaluate(ast);
-        assert(plan_del.authorized == true);
+        CHECK(plan_del.authorized);
         std::cout << "[PASS] test_security_hardening - sub==agent_id & delegation\n";
     }
 
@@ -205,7 +191,7 @@ void test_security_hardening() {
 
         LLMTOPMiddleware middleware(validator);
         auto plan = middleware.evaluate(ast);
-        assert(plan.authorized == false);
+        CHECK(!(plan.authorized));
         std::cout << "[PASS] test_security_hardening - alg enforcement (none rejected)\n";
     }
 
@@ -231,11 +217,11 @@ void test_security_hardening() {
         AST ast_bad = parser.parse(fix_chk(payload_bad));
         LLMTOPMiddleware middleware(validator);
         auto plan_bad = middleware.evaluate(ast_bad);
-        assert(plan_bad.authorized == false);
+        CHECK(!(plan_bad.authorized));
 
         AST ast_good = parser.parse(fix_chk(payload_good));
         auto plan_good = middleware.evaluate(ast_good);
-        assert(plan_good.authorized == true);
+        CHECK(plan_good.authorized);
         std::cout << "[PASS] test_security_hardening - iss and aud claims\n";
     }
 
@@ -255,7 +241,7 @@ void test_security_hardening() {
                 caught = true;
             }
         }
-        assert(caught);
+        CHECK(caught);
         std::cout << "[PASS] test_security_hardening - input size limit\n";
     }
 
@@ -278,8 +264,8 @@ void test_security_hardening() {
 
         LLMTOPMiddleware middleware(validator);
         auto plan = middleware.evaluate(ast);
-        assert(plan.authorized == false); // Should fail on write tool
-        assert(plan.error_message.find("Unauthorized tool call: write") != std::string::npos);
+        CHECK(!(plan.authorized)); // Should fail on write tool
+        CHECK_CONTAINS(plan.error_message, "Unauthorized tool call: write");
 
         // Let's test standard matching
         std::string payload_ok = 
@@ -287,7 +273,7 @@ void test_security_hardening() {
             "!read[path=readme_md;cap=" + cap1 + "]\n";
         AST ast_ok = parser.parse(fix_chk(payload_ok));
         auto plan_ok = middleware.evaluate(ast_ok);
-        assert(plan_ok.authorized == true);
+        CHECK(plan_ok.authorized);
 
         std::cout << "[PASS] test_security_hardening - per-segment glob matching\n";
     }
@@ -306,7 +292,7 @@ void test_fail_open_default_deny() {
             "!read[path=/etc/secrets]\n"));
         LLMTOPMiddleware middleware(validator);
         auto plan = middleware.evaluate(ast);
-        assert(plan.authorized == false);
+        CHECK(!(plan.authorized));
     }
 
     // (b) tgt pointer with NO capability -> reject
@@ -316,7 +302,7 @@ void test_fail_open_default_deny() {
             "[EXEC] tgt:src/secret.ts act:read\n"));
         LLMTOPMiddleware middleware(validator);
         auto plan = middleware.evaluate(ast);
-        assert(plan.authorized == false);
+        CHECK(!(plan.authorized));
     }
 
     // (c) Pure planning statement (no tool, no pointer) -> allow
@@ -326,7 +312,7 @@ void test_fail_open_default_deny() {
             "[PLAN] GL:refactor_auth act:plan\n"));
         LLMTOPMiddleware middleware(validator);
         auto plan = middleware.evaluate(ast);
-        assert(plan.authorized == true);
+        CHECK(plan.authorized);
     }
 
     std::cout << "[PASS] test_fail_open_default_deny\n";
@@ -344,7 +330,7 @@ void test_checksum_integrity() {
             "[PLAN] GL:do_thing\n"));
         LLMTOPMiddleware middleware(validator);
         auto plan = middleware.evaluate(ast);
-        assert(plan.authorized == true);
+        CHECK(plan.authorized);
     }
 
     // Body tampered after CHK was computed -> integrity fails
@@ -358,8 +344,8 @@ void test_checksum_integrity() {
         AST ast = parser.parse(tampered);
         LLMTOPMiddleware middleware(validator);
         auto plan = middleware.evaluate(ast);
-        assert(plan.authorized == false);
-        assert(plan.error_message.find("ERR:integrity") != std::string::npos);
+        CHECK(!(plan.authorized));
+        CHECK_CONTAINS(plan.error_message, "ERR:integrity");
     }
 
     std::cout << "[PASS] test_checksum_integrity\n";
@@ -378,7 +364,7 @@ void test_ttl_enforcement() {
             "!read[path=readme_md;cap=" + tool_cap + ";ttl=2000-01-01T00:00:00Z]\n"));
         LLMTOPMiddleware middleware(validator);
         auto plan = middleware.evaluate(ast);
-        assert(plan.authorized == false);
+        CHECK(!(plan.authorized));
     }
 
     // Future ttl -> allow
@@ -388,7 +374,7 @@ void test_ttl_enforcement() {
             "!read[path=readme_md;cap=" + tool_cap + ";ttl=2999-01-01T00:00:00Z]\n"));
         LLMTOPMiddleware middleware(validator);
         auto plan = middleware.evaluate(ast);
-        assert(plan.authorized == true);
+        CHECK(plan.authorized);
     }
 
     std::cout << "[PASS] test_ttl_enforcement\n";
@@ -402,9 +388,9 @@ void test_create_token_no_json_injection() {
     std::string token = validator->create_token(evil_sub, "execute:read", 9999999999LL);
 
     auto claim = validator->verify(token);
-    assert(claim.valid);
+    CHECK(claim.valid);
     // The legitimately-signed scope must win; the injected "execute:*" must not be honored.
-    assert(claim.scope == "execute:read");
+    CHECK_EQ(claim.scope, "execute:read");
 
     std::cout << "[PASS] test_create_token_no_json_injection\n";
 }
@@ -426,7 +412,7 @@ void test_tool_arg_binding() {
             "!read[path=src/auth.ts;cap=" + cap + "]\n"));
         LLMTOPMiddleware middleware(validator);
         auto plan = middleware.evaluate(ast);
-        assert(plan.authorized == true);
+        CHECK(plan.authorized);
     }
 
     // Out-of-scope resource with the SAME token -> reject
@@ -436,7 +422,7 @@ void test_tool_arg_binding() {
             "!read[path=/etc/passwd;cap=" + cap + "]\n"));
         LLMTOPMiddleware middleware(validator);
         auto plan = middleware.evaluate(ast);
-        assert(plan.authorized == false);
+        CHECK(!(plan.authorized));
     }
 
     std::cout << "[PASS] test_tool_arg_binding\n";
@@ -457,7 +443,7 @@ void test_path_traversal_prevention() {
     LLMTOPMiddleware middleware(validator);
     auto plan = middleware.evaluate(ast);
 
-    assert(plan.authorized == false);
+    CHECK(!(plan.authorized));
     std::cout << "[PASS] test_path_traversal_prevention\n";
 }
 
@@ -477,8 +463,8 @@ void test_out_of_band_proxy_mode() {
     {
         LLMTOPMiddleware middleware(validator);
         auto plan = middleware.evaluate(ast);
-        assert(plan.authorized == false);
-        assert(plan.error_message.find("ERR:cap_required") != std::string::npos);
+        CHECK(!(plan.authorized));
+        CHECK_CONTAINS(plan.error_message, "ERR:cap_required");
     }
 
     // 2. With proxy mode enabled, but agent has NO session grants -> MUST DENY
@@ -486,7 +472,7 @@ void test_out_of_band_proxy_mode() {
         LLMTOPMiddleware middleware(validator);
         middleware.set_out_of_band_proxy(true);
         auto plan = middleware.evaluate(ast);
-        assert(plan.authorized == false);
+        CHECK(!(plan.authorized));
     }
 
     // 3. With proxy mode enabled AND session capabilities granted to host proxy -> MUST AUTHORIZE
@@ -496,8 +482,8 @@ void test_out_of_band_proxy_mode() {
         middleware.grant_session_capability("subagent1", "read:src/main.cpp");
         middleware.grant_session_capability("subagent1", "execute:read:src/main.cpp");
         auto plan = middleware.evaluate(ast);
-        assert(plan.authorized == true);
-        assert(plan.approved_actions.size() == 2);
+        CHECK(plan.authorized);
+        CHECK_EQ(plan.approved_actions.size(), 2);
     }
 
     // 4. Out-of-scope request via proxy mode -> MUST DENY
@@ -511,7 +497,7 @@ void test_out_of_band_proxy_mode() {
         middleware.set_out_of_band_proxy(true);
         middleware.grant_session_capability("subagent1", "execute:read:src/*");
         auto plan = middleware.evaluate(ast_unauth);
-        assert(plan.authorized == false);
+        CHECK(!(plan.authorized));
     }
 
     std::cout << "[PASS] test_out_of_band_proxy_mode\n";
@@ -534,12 +520,12 @@ void test_idempotency_replay_protection() {
 
     // 1st Execution -> MUST SUCCEED
     auto plan1 = middleware.evaluate(ast);
-    assert(plan1.authorized == true);
+    CHECK(plan1.authorized);
 
     // 2nd Execution with SAME agent & REQID -> MUST BE REJECTED (REPLAY)
     auto plan2 = middleware.evaluate(ast);
-    assert(plan2.authorized == false);
-    assert(plan2.error_message.find("ERR:replay_detected") != std::string::npos);
+    CHECK(!(plan2.authorized));
+    CHECK_CONTAINS(plan2.error_message, "ERR:replay_detected");
 
     // Different REQID -> MUST SUCCEED
     std::string payload2 = 
@@ -547,17 +533,17 @@ void test_idempotency_replay_protection() {
         "!read[path=src/db.cpp;cap=" + tool_cap + "]\n";
     AST ast2 = parser.parse(fix_chk(payload2));
     auto plan3 = middleware.evaluate(ast2);
-    assert(plan3.authorized == true);
+    CHECK(plan3.authorized);
 
     std::cout << "[PASS] test_idempotency_replay_protection\n";
 }
 
 void test_multi_depth_glob_matching() {
     // Single level glob vs multi-depth glob (**)
-    assert(SimpleJWTValidator::scope_matches("read:src/*", "read:src/main.cpp") == true);
-    assert(SimpleJWTValidator::scope_matches("read:src/**", "read:src/sub/deep/main.cpp") == true);
-    assert(SimpleJWTValidator::scope_matches("read:**", "read:anything/anywhere.cpp") == true);
-    assert(SimpleJWTValidator::scope_matches("read:src/*", "read:other/main.cpp") == false);
+    CHECK(SimpleJWTValidator::scope_matches("read:src/*", "read:src/main.cpp"));
+    CHECK(SimpleJWTValidator::scope_matches("read:src/**", "read:src/sub/deep/main.cpp"));
+    CHECK(SimpleJWTValidator::scope_matches("read:**", "read:anything/anywhere.cpp"));
+    CHECK(!(SimpleJWTValidator::scope_matches("read:src/*", "read:other/main.cpp")));
     std::cout << "[PASS] test_multi_depth_glob_matching\n";
 }
 
@@ -580,6 +566,6 @@ int main() {
     test_middleware_no_agent();
     test_security_hardening();
     std::cout << "Middleware Tests completed successfully.\n";
-    return 0;
+    return TEST_SUMMARY("middleware_tests");
 }
 

@@ -1,7 +1,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
-#include <cassert>
+#include "test_harness.hpp"
 
 #include "parser_v2.hpp"
 
@@ -16,18 +16,18 @@ void test_quoted_strings() {
     LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
     AST ast = parser.parse(payload);
     
-    assert(ast.statements.size() == 1);
+    CHECK_EQ(ast.statements.size(), 1);
     
     // Check KV pairs
-    assert(ast.statements[0].kvpairs["ctx"] == "Hello [world]"); // Quotes stripped, spaces and brackets preserved!
-    assert(ast.statements[0].kvpairs["act"] == "refactor");
+    CHECK_EQ(ast.statements[0].kvpairs["ctx"], "Hello [world]"); // Quotes stripped, spaces and brackets preserved!
+    CHECK_EQ(ast.statements[0].kvpairs["act"], "refactor");
 
     // Check Tool Calls
-    assert(ast.statements[0].tool_calls.size() == 1);
+    CHECK_EQ(ast.statements[0].tool_calls.size(), 1);
     auto tool = ast.statements[0].tool_calls[0];
-    assert(tool.name == "run");
-    assert(tool.args["script"] == "build [release] env=prod");
-    assert(tool.args["target"] == "main.cpp");
+    CHECK_EQ(tool.name, "run");
+    CHECK_EQ(tool.args["script"], "build [release] env=prod");
+    CHECK_EQ(tool.args["target"], "main.cpp");
 
     std::cout << "[PASS] test_quoted_strings (Lexer works!)\n";
 }
@@ -43,12 +43,12 @@ void test_self_healing() {
             "[CODER tgt:src/main.cpp act:refactor\n"; // Missing closing bracket
         
         AST ast = parser.parse(payload);
-        assert(ast.healed_draft.size() == 1);
-        assert(ast.statements.size() == 0);
-        assert(ast.healed_draft[0].role == "CODER");
-        assert(ast.healed_draft[0].kvpairs["tgt"] == "src/main.cpp");
-        assert(ast.healed_draft[0].kvpairs["act"] == "refactor");
-        assert(ast.diagnostic.find("Self-healed unclosed role bracket") != std::string::npos);
+        CHECK_EQ(ast.healed_draft.size(), 1);
+        CHECK_EQ(ast.statements.size(), 0);
+        CHECK_EQ(ast.healed_draft[0].role, "CODER");
+        CHECK_EQ(ast.healed_draft[0].kvpairs["tgt"], "src/main.cpp");
+        CHECK_EQ(ast.healed_draft[0].kvpairs["act"], "refactor");
+        CHECK_CONTAINS(ast.diagnostic, "Self-healed unclosed role bracket");
     }
 
     // 2. Test unclosed quote recovery
@@ -58,11 +58,11 @@ void test_self_healing() {
             "[CODER] ctx:\"unclosed string act:refactor\n"; // Mismatched quotes
         
         AST ast = parser.parse(payload);
-        assert(ast.healed_draft.size() == 1);
-        assert(ast.statements.size() == 0);
+        CHECK_EQ(ast.healed_draft.size(), 1);
+        CHECK_EQ(ast.statements.size(), 0);
         // Quotes closed automatically, entire rest of line is treated as ctx value
-        assert(ast.healed_draft[0].kvpairs["ctx"] == "unclosed string act:refactor");
-        assert(ast.diagnostic.find("Self-healed unclosed quote") != std::string::npos);
+        CHECK_EQ(ast.healed_draft[0].kvpairs["ctx"], "unclosed string act:refactor");
+        CHECK_CONTAINS(ast.diagnostic, "Self-healed unclosed quote");
     }
 
     // 3. Test non-numeric HR header coercion
@@ -72,10 +72,10 @@ void test_self_healing() {
             "[CODER] tgt:src/main.cpp act:refactor\n";
         
         AST ast = parser.parse(payload);
-        assert(ast.statements.size() == 1);
-        assert(ast.healed_draft.size() == 0);
-        assert(ast.header.hr == 0); // Coerced to 0
-        assert(ast.diagnostic.find("Invalid HR value") != std::string::npos);
+        CHECK_EQ(ast.statements.size(), 1);
+        CHECK_EQ(ast.healed_draft.size(), 0);
+        CHECK_EQ(ast.header.hr, 0); // Coerced to 0
+        CHECK_CONTAINS(ast.diagnostic, "Invalid HR value");
     }
 
     std::cout << "[PASS] test_self_healing (Tolerant self-healing rules verified!)\n";
@@ -97,7 +97,7 @@ void test_duplicate_keys() {
                 caught = true;
             }
         }
-        assert(caught);
+        CHECK(caught);
     }
 
     // TOLERANT mode duplicate keys should take the last and place in healed_draft
@@ -109,10 +109,10 @@ void test_duplicate_keys() {
         LLMTOPParser parser(LLMTOPParser::Mode::TOLERANT);
         AST ast = parser.parse(payload);
         
-        assert(ast.healed_draft.size() == 1);
-        assert(ast.statements.size() == 0);
-        assert(ast.healed_draft[0].kvpairs["tgt"] == "src/main_v2.cpp"); // Last wins!
-        assert(ast.diagnostic.find("Duplicate key detected") != std::string::npos);
+        CHECK_EQ(ast.healed_draft.size(), 1);
+        CHECK_EQ(ast.statements.size(), 0);
+        CHECK_EQ(ast.healed_draft[0].kvpairs["tgt"], "src/main_v2.cpp"); // Last wins!
+        CHECK_CONTAINS(ast.diagnostic, "Duplicate key detected");
     }
     std::cout << "[PASS] test_duplicate_keys\n";
 }
@@ -126,10 +126,10 @@ void test_tool_name_trimming() {
     LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
     AST ast = parser.parse(payload);
     
-    assert(ast.statements.size() == 1);
-    assert(ast.statements[0].tool_calls.size() == 1);
-    assert(ast.statements[0].tool_calls[0].name == "read");
-    assert(ast.statements[0].tool_calls[0].method == "my_method");
+    CHECK_EQ(ast.statements.size(), 1);
+    CHECK_EQ(ast.statements[0].tool_calls.size(), 1);
+    CHECK_EQ(ast.statements[0].tool_calls[0].name, "read");
+    CHECK_EQ(ast.statements[0].tool_calls[0].method, "my_method");
     std::cout << "[PASS] test_tool_name_trimming\n";
 }
 
@@ -149,14 +149,14 @@ void test_ordered_serialization() {
     size_t pos_gl  = json_str.find("\"GL\"");
     size_t pos_td  = json_str.find("\"TD\"");
 
-    assert(pos_tgt != std::string::npos);
-    assert(pos_act != std::string::npos);
-    assert(pos_gl != std::string::npos);
-    assert(pos_td != std::string::npos);
+    CHECK(pos_tgt != std::string::npos);
+    CHECK(pos_act != std::string::npos);
+    CHECK(pos_gl != std::string::npos);
+    CHECK(pos_td != std::string::npos);
 
-    assert(pos_tgt < pos_act);
-    assert(pos_act < pos_gl);
-    assert(pos_gl < pos_td);
+    CHECK(pos_tgt < pos_act);
+    CHECK(pos_act < pos_gl);
+    CHECK(pos_gl < pos_td);
 
     std::cout << "[PASS] test_ordered_serialization (Sequence order preserved!)\n";
 }
@@ -170,12 +170,12 @@ void test_json_header_fidelity() {
     AST ast = parser.parse(payload);
 
     std::string js = toJson(ast);
-    assert(js.find("\"agent\": \"agent-7\"") != std::string::npos);
-    assert(js.find("\"uid\": \"user-9\"") != std::string::npos);
-    assert(js.find("\"time\": \"2026-07-18\"") != std::string::npos);
-    assert(js.find("\"reqid\": \"req-42\"") != std::string::npos);
-    assert(js.find("\"fallback\": \"json\"") != std::string::npos);
-    assert(js.find("\"hr\": 2") != std::string::npos);
+    CHECK_CONTAINS(js, "\"agent\": \"agent-7\"");
+    CHECK_CONTAINS(js, "\"uid\": \"user-9\"");
+    CHECK_CONTAINS(js, "\"time\": \"2026-07-18\"");
+    CHECK_CONTAINS(js, "\"reqid\": \"req-42\"");
+    CHECK_CONTAINS(js, "\"fallback\": \"json\"");
+    CHECK_CONTAINS(js, "\"hr\": 2");
 
     std::cout << "[PASS] test_json_header_fidelity\n";
 }
@@ -189,5 +189,5 @@ int main() {
     test_ordered_serialization();
     test_json_header_fidelity();
     std::cout << "All tests completed successfully.\n";
-    return 0;
+    return TEST_SUMMARY("core_tests");
 }

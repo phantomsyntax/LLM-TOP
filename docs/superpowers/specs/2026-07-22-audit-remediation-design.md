@@ -131,7 +131,7 @@ Prerequisite for trusting every later phase.
 | T1 | `test_harness.hpp` providing `CHECK`, `CHECK_EQ`, `CHECK_THROWS` that survive `NDEBUG`, accumulate failures, print a summary, and drive a nonzero exit | A deliberately broken assertion fails the suite under `--config Release`, not just Debug |
 | T1 | Convert all 174 assertions across the 7 test files | No `assert(` remains in `test_*.cpp`; `cassert` removed from test TUs |
 | T2 | `benchmarker` is **removed from ctest** and kept as a manually-invoked target — it is a benchmark, not a test | No ctest target can pass without evaluating at least one condition |
-| T7 | Integration fixtures are **committed** (drop `LLM_Mock/` from `.gitignore`); they total ~73 lines, so generating them would add more code than it saves | A fresh clone runs the full suite green |
+| T7 | The mock fixtures are **deleted, not relocated**. They are leftovers from the early heuristic-testing stage: one line reads one of them, asserting only that `ifstream` works and that a file contains a string it was written with — no LLM-TOP code is exercised. `astar.cpp` is opened by nothing. The `.gitignore` entry was vestigial anyway, since `LLM_Mock/` sits outside the git root and could never have been tracked | A fresh clone runs the full suite green, and the suite still passes with the `../LLM_Mock` sibling directory renamed away |
 | — | CMake sets a default `CMAKE_BUILD_TYPE` and moves to **C++20** (see D-2 in Phase 4); both configs exercised | Documented build commands cover Debug and Release |
 
 **Note:** `test_schema_validator()` and `test_fallback_recovery()` are test bodies living inside
