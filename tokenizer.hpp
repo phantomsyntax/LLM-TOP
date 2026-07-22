@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <string_view>
 #include <vector>
 #include <unordered_map>
 #include <fstream>
@@ -8,7 +9,8 @@
 #include <climits>
 #include <array>
 #include <cctype>
-#include <queue>
+#include <algorithm>
+#include <functional>
 
 // Self-contained cl100k_base (tiktoken) BPE tokenizer.
 //
@@ -29,6 +31,22 @@
 // is worse than one that failed to run.
 class Cl100kTokenizer {
 public:
+    // Transparent hashing so the merge loop can probe the rank table with a
+    // std::string_view over the input. Without this, every candidate pair would
+    // have to be materialized as a temporary std::string just to be looked up
+    // and thrown away -- which is most of the allocation in tokenization.
+    struct StringHash {
+        using is_transparent = void;
+        size_t operator()(std::string_view sv) const noexcept {
+            return std::hash<std::string_view>{}(sv);
+        }
+    };
+    struct StringEq {
+        using is_transparent = void;
+        bool operator()(std::string_view a, std::string_view b) const noexcept { return a == b; }
+    };
+    using RankMap = std::unordered_map<std::string, int, StringHash, StringEq>;
+
     explicit Cl100kTokenizer(const std::string& ranks_path) {
         std::ifstream in(ranks_path, std::ios::binary);
         if (!in) {
@@ -58,10 +76,11 @@ public:
     std::vector<int> encode(const std::string& text) const {
         require_ascii(text);
         std::vector<int> out;
+        std::string_view view(text);
         size_t i = 0, n = text.size();
         while (i < n) {
             size_t len = next_pretoken(text, i); // guaranteed >= 1
-            bpe(text.substr(i, len), out);
+            bpe(view.substr(i, len), out);       // a view, not a copy
             i += len;
         }
         return out;
@@ -101,10 +120,10 @@ public:
 
     // The loaded vocabulary (token bytes -> id). Exposed so the tests can run an
     // independent reference merge against the same ranks.
-    const std::unordered_map<std::string, int>& ranks() const { return ranks_; }
+    const RankMap& ranks() const { return ranks_; }
 
 private:
-    std::unordered_map<std::string, int> ranks_;
+    RankMap ranks_;
     std::unordered_map<int, const std::string*> inverse_;
 
     static void require_ascii(const std::string& text) {
@@ -193,20 +212,42 @@ private:
         return 1; // safety: never return 0
     }
 
+    static constexpr uint32_t kNone = UINT32_MAX;
+
     struct MergePair {
         int rank;
-        size_t index;
+        uint32_t index;
         bool operator>(const MergePair& other) const {
             if (rank != other.rank) return rank > other.rank;
-            return index > other.index;
+            return index > other.index;   // leftmost wins ties, as tiktoken does
         }
+    };
+
+    // A node is a half-open range [start, start+len) into the pre-token.
+    //
+    // The key invariant: a merge only ever joins two *adjacent* nodes, so every
+    // node's range stays contiguous in the original piece. That means the
+    // concatenation of node i and node j is just the range starting at i.start
+    // with length i.len + j.len -- no bytes need to be copied to look it up.
+    struct Node {
+        uint32_t start;
+        uint32_t len;
+        uint32_t prev;
+        uint32_t next;
+        bool active;
     };
 
     // Byte-pair merge one pre-token, appending resulting token ids to `out`.
     // tiktoken's algorithm: start from single bytes, repeatedly merge the adjacent
     // pair with the lowest rank until no adjacent pair is mergeable. Implemented
-    // as an O(n log n) priority queue over candidate pairs rather than a rescan.
-    void bpe(const std::string& piece, std::vector<int>& out) const {
+    // as an O(n log n) heap over candidate pairs rather than a rescan.
+    //
+    // Nodes carry (start, len) rather than a std::string, and candidate pairs are
+    // probed as string_views over the piece, so a merge allocates nothing. The
+    // previous version built a temporary std::string for every probe and appended
+    // to a per-node string on every merge; this loop runs over every byte of every
+    // payload the benchmarks measure.
+    void bpe(std::string_view piece, std::vector<int>& out) const {
         if (piece.empty()) return;
         if (piece.size() == 1) {
             auto it = ranks_.find(piece);
@@ -215,69 +256,69 @@ private:
             return;
         }
 
-        struct Node {
-            std::string str;
-            size_t prev;
-            size_t next;
-            bool active = true;
-        };
+        // Scratch buffers reused across calls. bpe() runs once per pre-token, so
+        // a fresh vector per call would allocate several times per line of input.
+        static thread_local std::vector<Node> nodes;
+        static thread_local std::vector<MergePair> heap;
+        const uint32_t n = static_cast<uint32_t>(piece.size());
+        nodes.clear();
+        nodes.resize(n);
+        heap.clear();
 
-        std::vector<Node> nodes(piece.size());
-        for (size_t i = 0; i < piece.size(); ++i) {
-            nodes[i].str = std::string(1, piece[i]);
-            nodes[i].prev = (i == 0) ? SIZE_MAX : i - 1;
-            nodes[i].next = (i + 1 < piece.size()) ? i + 1 : SIZE_MAX;
+        for (uint32_t i = 0; i < n; ++i) {
+            nodes[i] = Node{ i, 1, (i == 0) ? kNone : i - 1, (i + 1 < n) ? i + 1 : kNone, true };
         }
 
-        std::priority_queue<MergePair, std::vector<MergePair>, std::greater<MergePair>> pq;
+        const auto cmp = std::greater<MergePair>{};
 
-        auto check_pair = [&](size_t i) {
-            if (i == SIZE_MAX || nodes[i].next == SIZE_MAX || !nodes[i].active || !nodes[nodes[i].next].active) return;
-            auto it = ranks_.find(nodes[i].str + nodes[nodes[i].next].str);
+        auto push_pair = [&](uint32_t i) {
+            if (i == kNone || !nodes[i].active) return;
+            const uint32_t j = nodes[i].next;
+            if (j == kNone || !nodes[j].active) return;
+            // Contiguity invariant makes this the concatenation of i and j.
+            const std::string_view cand(piece.data() + nodes[i].start, nodes[i].len + nodes[j].len);
+            auto it = ranks_.find(cand);
             if (it != ranks_.end()) {
-                pq.push({it->second, i});
+                heap.push_back(MergePair{ it->second, i });
+                std::push_heap(heap.begin(), heap.end(), cmp);
             }
         };
 
-        for (size_t i = 0; i + 1 < piece.size(); ++i) {
-            check_pair(i);
-        }
+        for (uint32_t i = 0; i + 1 < n; ++i) push_pair(i);
 
-        while (!pq.empty()) {
-            auto top = pq.top();
-            pq.pop();
+        while (!heap.empty()) {
+            std::pop_heap(heap.begin(), heap.end(), cmp);
+            const MergePair top = heap.back();
+            heap.pop_back();
 
-            size_t i = top.index;
-            if (!nodes[i].active || nodes[i].next == SIZE_MAX || !nodes[nodes[i].next].active) continue;
+            const uint32_t i = top.index;
+            if (!nodes[i].active) continue;
+            const uint32_t j = nodes[i].next;
+            if (j == kNone || !nodes[j].active) continue;
 
-            // Re-verify current rank matches
-            size_t j = nodes[i].next;
-            auto it = ranks_.find(nodes[i].str + nodes[j].str);
+            // The heap can hold entries that a later merge invalidated. Re-probe
+            // and drop any whose rank no longer matches what was queued.
+            const std::string_view cand(piece.data() + nodes[i].start, nodes[i].len + nodes[j].len);
+            auto it = ranks_.find(cand);
             if (it == ranks_.end() || it->second != top.rank) continue;
 
-            // Perform merge of nodes[i] and nodes[j]
-            nodes[i].str += nodes[j].str;
+            nodes[i].len += nodes[j].len;
             nodes[j].active = false;
             nodes[i].next = nodes[j].next;
-            if (nodes[j].next != SIZE_MAX) {
-                nodes[nodes[j].next].prev = i;
-            }
+            if (nodes[j].next != kNone) nodes[nodes[j].next].prev = i;
 
-            // Push updated neighbor pairs
-            check_pair(nodes[i].prev);
-            check_pair(i);
+            push_pair(nodes[i].prev);
+            push_pair(i);
         }
 
-        size_t curr = 0;
-        while (curr != SIZE_MAX) {
-            if (nodes[curr].active) {
-                auto it = ranks_.find(nodes[curr].str);
-                if (it == ranks_.end()) {
-                    throw std::runtime_error("Cl100kTokenizer: byte sequence not in ranks");
-                }
-                out.push_back(it->second);
+        for (uint32_t curr = 0; curr != kNone; curr = nodes[curr].next) {
+            if (!nodes[curr].active) continue;
+            const std::string_view tok(piece.data() + nodes[curr].start, nodes[curr].len);
+            auto it = ranks_.find(tok);
+            if (it == ranks_.end()) {
+                throw std::runtime_error("Cl100kTokenizer: byte sequence not in ranks");
             }
-            curr = nodes[curr].next;
+            out.push_back(it->second);
         }
     }
 

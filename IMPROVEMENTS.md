@@ -32,15 +32,20 @@ This document details the completed security hardening, algorithmic optimization
 
 ## 2. Completed Performance & Algorithmic Optimizations
 
-### 2.1 $O(n \log n)$ Priority-Queue BPE Tokenizer Merge
-- **Problem**: Original BPE merge scan in `Cl100kTokenizer::bpe()` ran in $O(n^2)$ time over byte vectors.
-- **Solution**: Refactored `bpe()` in `tokenizer.hpp` to maintain a min-heap priority queue (`std::priority_queue<MergePair>`) over doubly-linked token nodes.
-- **Impact**: Reduces BPE tokenization merge time complexity from $O(n^2)$ to $O(n \log n)$, matching tiktoken's production engine performance.
+### 2.1 BPE Tokenizer Merge: $O(n \log n)$ and Allocation-Free
+- **Problem**: the original merge scan in `Cl100kTokenizer::bpe()` was $O(n^2)$ over byte vectors. The heap rewrite fixed the complexity but still built a temporary `std::string` for every candidate-pair lookup and appended to a per-node string on every merge.
+- **Solution**: a min-heap over doubly-linked nodes, where each node is a `(start, len)` range rather than a string. Merges only ever join adjacent nodes, so ranges stay contiguous and a candidate pair is a `std::string_view` over the original piece. Lookups use C++20 heterogeneous hashing (`is_transparent`), so probing allocates nothing; node and heap scratch buffers are reused across pre-tokens.
+- **Impact**: **2.6x faster** — 5.59 MB/s to 14.41 MB/s on a 57.6 KB protocol payload (206.2 ms to 79.9 ms over 20 iterations, MSVC `/O2`). Token output is byte-identical, which `test_tokenizer.cpp` enforces by comparing the fast merge against an independent naive reference on every corpus payload.
 
-### 2.2 Scope Splitting & JSON Escaping
+### 2.1b SHA-256 Block Absorption
+- **Problem**: `SHA256::update()` copied input a byte at a time into the block buffer, paying a bounds check and a branch per byte. Every frame is hashed for `CHK`.
+- **Solution**: top up any partial block, then transform full blocks directly out of the caller's buffer with no copy at all, retaining only the trailing remainder.
+
+### 2.2 Allocation-Free Scope Matching & JSON Escaping
 - **JSON Escaping**: Replaced `std::ostringstream` in `escape_json()` (`json_utils.hpp`) with a directly reserved string buffer.
-- **Scope Splitting**: `scope_matches()` in `middleware.hpp` splits scopes with `std::string_view` (`split_scope_sv`) rather than substring copies.
-- **Correction**: this section previously described the result as "zero-allocation". It is not — `scope_matches()` still allocates a vector plus per-segment strings on the authorization path. The `string_view` split removed some copies, not all allocation. Removing the rest is tracked as a pending optimization.
+- **Scope Matching**: `scope_matches()` is now genuinely allocation-free. It walks both scopes as `string_view`s via a cursor instead of building `std::vector<string_view>`, and path normalization writes segment views into a fixed stack buffer instead of `normalize_path_segment()`'s vector-of-strings-then-join. This runs for every pointer and every tool call of every request.
+- **Note on an earlier overclaim**: this section previously called the result "zero-allocation" while `scope_matches()` still allocated a vector plus two strings per scope segment. The claim is now true; it was not when it was written.
+- **Safety**: a path deeper than 64 segments is refused outright rather than truncated, since silently dropping segments inside an authorization decision would let a long path match a short grant.
 
 ### 2.3 Loss-Free Binary Header `OP_HR` Serialization
 - **Feature**: Updated `encode_header()` in `binary_encoder.hpp` to serialize `OP_HR` when `hr > 0`, making binary header serialization 100% loss-free alongside `decode_header()`.

@@ -210,8 +210,46 @@ void test_healed_flag_attribution() {
     std::cout << "[PASS] test_healed_flag_attribution\n";
 }
 
+// ordered_map::operator[] hands out a reference into its backing sequence. With
+// a vector behind it, any later insertion could reallocate and leave that
+// reference dangling -- undefined behavior that happens to work until it does
+// not. The container is a deque now, where appending never invalidates
+// references to existing elements.
+void test_ordered_map_reference_survives_growth() {
+    ordered_map m;
+    std::string& first = m["tgt"];
+    first = "src/main.cpp";
+
+    // Enough insertions to force many reallocations under the old vector.
+    for (int i = 0; i < 256; ++i) {
+        m["k" + std::to_string(i)] = "v" + std::to_string(i);
+    }
+
+    // Writing through the original reference must still reach the same entry.
+    first = "src/other.cpp";
+    CHECK_EQ(m.at("tgt"), std::string("src/other.cpp"));
+    CHECK_EQ(m.size(), 257u);
+
+    // Insertion order is still the point of this container.
+    CHECK_EQ(m.begin()->first, std::string("tgt"));
+
+    // insert_or_assign overwrites, which is what its name now promises.
+    m.insert_or_assign({"tgt", "src/third.cpp"});
+    CHECK_EQ(m.at("tgt"), std::string("src/third.cpp"));
+    CHECK_EQ(m.size(), 257u);
+
+    // erase compacts and keeps the remaining index consistent.
+    m.erase("k0");
+    CHECK_EQ(m.size(), 256u);
+    CHECK_EQ(m.at("k255"), std::string("v255"));
+    CHECK_EQ(m.count("k0"), 0u);
+
+    std::cout << "[PASS] ordered_map references survive growth\n";
+}
+
 int main() {
     std::cout << "Running LLM-TOP Parser Tests v3...\n";
+    test_ordered_map_reference_survives_growth();
     test_quoted_strings();
     test_self_healing();
     test_duplicate_keys();

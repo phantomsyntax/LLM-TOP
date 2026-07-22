@@ -29,14 +29,38 @@ public:
         finalized_ = false;
     }
 
+    // Absorb input a block at a time rather than a byte at a time. Every frame
+    // is hashed for CHK, so this runs over the whole payload; the byte loop paid
+    // a bounds-check and a branch per byte to do what one memcpy does.
     void update(const uint8_t* data, size_t len) {
-        for (size_t i = 0; i < len; ++i) {
-            buf_[buf_len_++] = data[i];
+        size_t pos = 0;
+
+        // Top up a partially filled buffer first.
+        if (buf_len_ > 0) {
+            const size_t need = BLOCK_SIZE - buf_len_;
+            const size_t take = (len < need) ? len : need;
+            std::memcpy(buf_.data() + buf_len_, data, take);
+            buf_len_ += take;
+            pos += take;
             if (buf_len_ == BLOCK_SIZE) {
                 transform(buf_.data());
                 count_ += BLOCK_SIZE * 8;
                 buf_len_ = 0;
             }
+        }
+
+        // Full blocks transform straight from the caller's memory, with no copy.
+        while (pos + BLOCK_SIZE <= len) {
+            transform(data + pos);
+            count_ += BLOCK_SIZE * 8;
+            pos += BLOCK_SIZE;
+        }
+
+        // Whatever is left is a partial block held for the next call.
+        if (pos < len) {
+            const size_t rest = len - pos;
+            std::memcpy(buf_.data(), data + pos, rest);
+            buf_len_ = rest;
         }
     }
 

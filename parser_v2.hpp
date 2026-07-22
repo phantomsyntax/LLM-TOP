@@ -3,6 +3,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <deque>
 #include <sstream>
 #include <stdexcept>
 #include <optional>
@@ -13,7 +14,7 @@
 class ordered_map {
 public:
     using value_type = std::pair<std::string, std::string>;
-    using container_type = std::vector<value_type>;
+    using container_type = std::deque<value_type>;   // see the note on data_ below
     using iterator = container_type::iterator;
     using const_iterator = container_type::const_iterator;
 
@@ -78,11 +79,15 @@ public:
         index_.clear(); 
     }
 
+    // O(n) in the number of entries: the backing sequence is compacted and every
+    // later index is fixed up. These maps hold a handful of keys per statement,
+    // so that is the right trade against the bookkeeping a tombstone scheme would
+    // need. Unlike append, erase DOES invalidate outstanding references.
     void erase(const std::string& key) {
         auto it = index_.find(key);
         if (it != index_.end()) {
             size_t idx = it->second;
-            data_.erase(data_.begin() + idx);
+            data_.erase(data_.begin() + static_cast<std::ptrdiff_t>(idx));
             index_.erase(it);
             for (auto& pair : index_) {
                 if (pair.second > idx) {
@@ -92,7 +97,10 @@ public:
         }
     }
 
-    void insert(const std::pair<std::string, std::string>& pair) {
+    // Named for what it does. It was called insert(), which in every standard
+    // associative container leaves an existing value alone -- this overwrites it,
+    // so the old name promised the opposite of the behavior.
+    void insert_or_assign(const std::pair<std::string, std::string>& pair) {
         auto it = index_.find(pair.first);
         if (it != index_.end()) {
             data_[it->second].second = pair.second;
@@ -103,6 +111,16 @@ public:
     }
 
 private:
+    // A deque, not a vector, so that appending never invalidates references to
+    // existing elements. operator[] hands out a std::string& into this sequence;
+    // with a vector, the sequence below was undefined behavior the moment the
+    // second insertion reallocated:
+    //
+    //     std::string& v = m["a"];
+    //     m["b"] = "x";           // vector may reallocate here
+    //     v = "y";                // ... leaving v dangling
+    //
+    // Nothing in this repository depends on the storage being contiguous.
     container_type data_;
     std::unordered_map<std::string, size_t> index_;
 };

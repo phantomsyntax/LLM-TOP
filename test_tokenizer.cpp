@@ -15,7 +15,7 @@
 // rank, leftmost on ties, until nothing is mergeable. It is O(n^2) and obviously
 // correct, which is the point -- tokenizer.hpp's priority-queue version is the
 // fast one, and every published token count depends on the two agreeing.
-static std::vector<int> reference_bpe(const std::unordered_map<std::string, int>& ranks,
+static std::vector<int> reference_bpe(const Cl100kTokenizer::RankMap& ranks,
                                       const std::string& piece) {
     std::vector<std::string> parts;
     parts.reserve(piece.size());

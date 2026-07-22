@@ -319,43 +319,103 @@ public:
         return segment.compare(segment.size() - suffix.size(), suffix.size(), suffix) == 0;
     }
 
-    // Match a slash-delimited path against a pattern.
+    // A path deeper than this is refused rather than truncated. Silently
+    // dropping segments in an authorization decision would be a way to make a
+    // long path match a short grant.
+    static constexpr size_t kMaxPathSegments = 64;
+    static constexpr size_t kTooManySegments = SIZE_MAX;
+
+    // Split `s` on '/' or '\' while normalizing in place: empty segments and "."
+    // are dropped and ".." pops the previous segment. Results are views into `s`,
+    // so nothing is copied.
+    //
+    // This replaces normalize_path_segment()'s build-a-vector-of-strings-then-
+    // join-them approach on the authorization path, which allocated a vector and
+    // two strings for every scope segment of every request.
+    static size_t normalize_segments(std::string_view s, std::string_view* out,
+                                     size_t cap, bool* absolute) {
+        *absolute = (!s.empty() && (s[0] == '/' || s[0] == '\\'));
+        size_t count = 0, start = 0;
+        while (start < s.size()) {
+            size_t end = s.find_first_of("/\\", start);
+            if (end == std::string_view::npos) end = s.size();
+            std::string_view seg = s.substr(start, end - start);
+            if (!seg.empty() && seg != ".") {
+                if (seg == ".." && count > 0 && out[count - 1] != "..") {
+                    --count;                       // climb back out
+                } else {
+                    if (count >= cap) return kTooManySegments;
+                    out[count++] = seg;
+                }
+            }
+            if (end == s.size()) break;
+            start = end + 1;
+        }
+        return count;
+    }
+
+    // Match a slash-delimited path against a pattern, both already normalized
+    // into segment arrays.
     //   '*'  matches exactly one path segment and never crosses '/'
     //   '**' matches all remaining segments
-    // Both sides must already be normalized, so a traversal that climbs out of
-    // the granted subtree presents as a leading ".." segment and fails to match.
-    static bool path_glob_matches(const std::string& pattern, const std::string& path) {
-        auto p = split_scope_sv(pattern, '/');
-        auto t = split_scope_sv(path, '/');
+    // A traversal that climbs out of the granted subtree presents as a leading
+    // ".." segment and fails to match.
+    static bool path_glob_matches_segs(const std::string_view* p, size_t pn, bool p_abs,
+                                       const std::string_view* t, size_t tn, bool t_abs) {
+        if (p_abs != t_abs) return false;
         size_t i = 0;
-        for (; i < p.size(); ++i) {
+        for (; i < pn; ++i) {
             if (p[i] == "**") return true;   // absorbs every remaining segment
-            if (i >= t.size()) return false;
+            if (i >= tn) return false;
             if (p[i] == "*") continue;       // exactly one segment
             if (!segment_matches(p[i], t[i])) return false;
         }
-        return i == t.size();               // no unmatched trailing segments
+        return i == tn;                      // no unmatched trailing segments
+    }
+
+    // Yield the next ':'-delimited segment of `s`, advancing `cursor`.
+    // Returns false when exhausted. A trailing ':' yields no final empty
+    // segment, matching the previous split behavior exactly.
+    static bool next_colon_segment(std::string_view s, size_t& cursor, std::string_view& out) {
+        if (cursor >= s.size()) return false;
+        size_t end = s.find(':', cursor);
+        if (end == std::string_view::npos) end = s.size();
+        out = s.substr(cursor, end - cursor);
+        cursor = end + 1;
+        return true;
     }
 
     // Check if a granted scope authorizes a requested one. Scopes are split on
     // ':' into action/resource segments; the resource segment is then matched
     // as a path so that '*' cannot silently span directories.
-    static bool scope_matches(const std::string& granted, const std::string& requested) {
+    //
+    // Allocation-free: both scopes are walked as views and path segments land in
+    // stack buffers. This is the authorization hot path -- it runs for every
+    // pointer and every tool call of every request.
+    static bool scope_matches(std::string_view granted, std::string_view requested) {
         if (granted == "**") return true;
-        auto g_segs = split_scope_sv(granted, ':');
-        auto r_segs = split_scope_sv(requested, ':');
 
-        for (size_t i = 0; i < g_segs.size(); ++i) {
-            if (g_segs[i] == "**") return true; // grants everything from here on
-            if (i >= r_segs.size()) return false;
-            if (g_segs[i] == "*") continue;     // any one colon-segment
+        size_t gc = 0, rc = 0, g_count = 0, r_count = 0;
+        std::string_view g_seg, r_seg;
 
-            std::string g_norm = normalize_path_segment(std::string(g_segs[i]));
-            std::string r_norm = normalize_path_segment(std::string(r_segs[i]));
+        while (next_colon_segment(granted, gc, g_seg)) {
+            ++g_count;
+            if (g_seg == "**") return true;     // grants everything from here on
+            if (!next_colon_segment(requested, rc, r_seg)) return false;
+            ++r_count;
+            if (g_seg == "*") continue;         // any one colon-segment
 
-            if (!path_glob_matches(g_norm, r_norm)) return false;
+            std::string_view gp[kMaxPathSegments], tp[kMaxPathSegments];
+            bool g_abs = false, t_abs = false;
+            size_t gn = normalize_segments(g_seg, gp, kMaxPathSegments, &g_abs);
+            size_t tn = normalize_segments(r_seg, tp, kMaxPathSegments, &t_abs);
+            if (gn == kTooManySegments || tn == kTooManySegments) return false;
+
+            if (!path_glob_matches_segs(gp, gn, g_abs, tp, tn, t_abs)) return false;
         }
-        return g_segs.size() == r_segs.size();
+
+        while (next_colon_segment(requested, rc, r_seg)) ++r_count;
+        return g_count == r_count;
     }
 
 private:

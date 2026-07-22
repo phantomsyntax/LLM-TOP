@@ -113,11 +113,16 @@ function Test-JsonShape {
 
 function Invoke-Planner {
     param([string]$Model, [string]$System, [string]$UserPrompt)
+    # Budget generously. Reasoning models spend completion tokens on hidden
+    # reasoning before emitting any content: at max_tokens=300 one of them
+    # returned 1467 characters of reasoning_content and an EMPTY content field,
+    # which scored as 0/10 compliance for both formats. A response cut off by the
+    # token limit says nothing about whether a model can emit a format.
     $body = @{
         model = $Model
         messages = @(@{role="system";content=$System}, @{role="user";content=$UserPrompt})
         temperature = 0.1
-        max_tokens = 300
+        max_tokens = 1500
     } | ConvertTo-Json -Depth 5
 
     # Retry transport failures with backoff. A 503 from a shared free-tier
@@ -130,8 +135,15 @@ function Invoke-Planner {
         try {
             $r = Invoke-RestMethod -Uri $Url -Method Post -Headers $headers -Body $body -TimeoutSec $TimeoutSec
             $sw.Stop()
-            $txt = $r.choices[0].message.content
+            $choice = $r.choices[0]
+            $txt = $choice.message.content
             if ($null -eq $txt) { $txt = "" }
+
+            # A truncated generation is a budget artifact, not a format failure.
+            # Excluded from the denominator the same way a 503 is.
+            $truncated = ($choice.finish_reason -eq 'length')
+            $reasoned  = [bool]$choice.message.reasoning_content
+
             # Strip fences models add despite instructions. Their presence is
             # itself a compliance signal, but it is a wrapper, not a malformed
             # payload, so it is recorded rather than counted as a failure.
@@ -139,7 +151,8 @@ function Invoke-Planner {
             $txt = ($txt -replace '(?s)```[a-zA-Z]*', '').Trim()
             return [PSCustomObject]@{
                 Text=$txt; Sec=[math]::Round($sw.Elapsed.TotalSeconds,2)
-                Fenced=$fenced; Error=$null; Transport=$false; Attempts=$attempt
+                Fenced=$fenced; Error=$(if ($truncated) { "truncated at max_tokens" } else { $null })
+                Transport=$false; Truncated=$truncated; Reasoned=$reasoned; Attempts=$attempt
             }
         } catch {
             $msg = $_.Exception.Message
@@ -151,7 +164,8 @@ function Invoke-Planner {
             $sw.Stop()
             return [PSCustomObject]@{
                 Text=""; Sec=[math]::Round($sw.Elapsed.TotalSeconds,2)
-                Fenced=$false; Error=$msg; Transport=$true; Attempts=$attempt
+                Fenced=$false; Error=$msg; Transport=$true
+                Truncated=$false; Reasoned=$false; Attempts=$attempt
             }
         }
     }
@@ -215,7 +229,8 @@ foreach ($model in $Models) {
 
                 $rows += [PSCustomObject]@{
                     Model=$model; Task=$task.id; Trial=$trial; Format=$fmt
-                    Valid=$valid; Transport=$resp.Transport; Tokens=$tokens
+                    Valid=$valid; Transport=$resp.Transport; Truncated=$resp.Truncated
+                    Reasoned=$resp.Reasoned; Tokens=$tokens
                     Sec=$resp.Sec; Attempts=$resp.Attempts; Fenced=$resp.Fenced
                     Note=$errText; Response=($resp.Text -replace '\r?\n','\n')
                 }
@@ -235,7 +250,7 @@ Write-Host "`nRaw results written to $OutCsv`n"
 Write-Host "========================================================================="
 Write-Host "                 COMPLIANCE (valid / attempted)"
 Write-Host "========================================================================="
-Write-Host ("{0,-45} {1,-9} {2,8} {3,22} {4,9}" -f "Model","Format","Rate","95% Wilson CI","Dropped")
+Write-Host ("{0,-45} {1,-9} {2,8} {3,22} {4,9}" -f "Model","Format","Rate","95% Wilson CI","Excluded")
 Write-Host ("-" * 99)
 
 # Transport failures are excluded from the denominator: a 503 is a fact about a
@@ -243,7 +258,7 @@ Write-Host ("-" * 99)
 foreach ($model in $Models) {
     foreach ($fmt in @("llmtop","json")) {
         $all     = @($rows | Where-Object { $_.Model -eq $model -and $_.Format -eq $fmt })
-        $scored  = @($all | Where-Object { -not $_.Transport })
+        $scored  = @($all | Where-Object { -not $_.Transport -and -not $_.Truncated })
         $dropped = $all.Count - $scored.Count
         $n = $scored.Count
         $k = @($scored | Where-Object { $_.Valid }).Count
@@ -256,7 +271,7 @@ Write-Host "`n==================================================================
 Write-Host "                 OVERALL"
 Write-Host "========================================================================="
 foreach ($fmt in @("llmtop","json")) {
-    $scored = @($rows | Where-Object { $_.Format -eq $fmt -and -not $_.Transport })
+    $scored = @($rows | Where-Object { $_.Format -eq $fmt -and -not $_.Transport -and -not $_.Truncated })
     $n = $scored.Count
     $k = @($scored | Where-Object { $_.Valid }).Count
     $ci = Get-WilsonInterval -Successes $k -Total $n
@@ -264,14 +279,14 @@ foreach ($fmt in @("llmtop","json")) {
 }
 
 # Failure taxonomy: which failures are the format's fault is the whole question.
-$badTop = @($rows | Where-Object { $_.Format -eq "llmtop" -and -not $_.Transport -and -not $_.Valid })
+$badTop = @($rows | Where-Object { $_.Format -eq "llmtop" -and -not $_.Transport -and -not $_.Truncated -and -not $_.Valid })
 if ($badTop.Count -gt 0) {
     Write-Host "`n--- LLM-TOP failure modes ---"
     $badTop | Group-Object Note | Sort-Object Count -Descending | ForEach-Object {
         Write-Host ("  {0,3}x  {1}" -f $_.Count, $_.Name)
     }
 }
-$badJson = @($rows | Where-Object { $_.Format -eq "json" -and -not $_.Transport -and -not $_.Valid })
+$badJson = @($rows | Where-Object { $_.Format -eq "json" -and -not $_.Transport -and -not $_.Truncated -and -not $_.Valid })
 if ($badJson.Count -gt 0) {
     Write-Host "`n--- JSON failure modes ---"
     $badJson | Group-Object Note | Sort-Object Count -Descending | ForEach-Object {
