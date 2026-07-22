@@ -6,7 +6,7 @@
 #include <memory>
 #include "test_harness.hpp"
 
-using llmtop_test::fix_chk;
+// stamp_chk comes from chk.hpp (the public producer API)
 static const std::string TEST_SECRET = llmtop_test::kTestSecret;
 
 
@@ -27,7 +27,7 @@ void run_scenario_1_auth_reader() {
 
     // 1. Parse payload
     LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
-    AST ast = parser.parse(fix_chk(payload));
+    AST ast = parser.parse(stamp_chk(payload));
     CHECK_EQ(ast.statements.size(), 1);
     std::cout << "  - Parsed successfully.\n";
 
@@ -61,7 +61,7 @@ void run_scenario_2_astar_executor() {
 
     // 1. Parse payload
     LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
-    AST ast = parser.parse(fix_chk(payload));
+    AST ast = parser.parse(stamp_chk(payload));
     CHECK_EQ(ast.statements.size(), 1);
     std::cout << "  - Parsed successfully.\n";
 

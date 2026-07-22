@@ -172,7 +172,7 @@ int main() {
         auto validator = std::make_shared<SimpleJWTValidator>(llmtop_test::kTestSecret);
         const std::string good_cap =
             validator->create_token("agent1", "execute:read:src/*", 9999999999LL);
-        const std::string base = llmtop_test::fix_chk(
+        const std::string base = stamp_chk(
             "VER:LLM-TOPv1 CHK:sha256:0000 AGT:agent1 UID:u TIM:2026-07-18 REQID:rq1 FALLBACK:json\n"
             "[EXEC] tgt:src/main.cpp:cap=" + good_cap + " act:read\n"
             "!read[path=src/main.cpp;cap=" + good_cap + "]\n");

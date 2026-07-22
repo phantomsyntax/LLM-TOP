@@ -5,7 +5,7 @@
 #include "test_support.hpp"
 
 // Shared secret for all test JWTs
-using llmtop_test::fix_chk;
+// stamp_chk comes from chk.hpp (the public producer API)
 static const std::string TEST_SECRET = llmtop_test::kTestSecret;
 
 
@@ -23,7 +23,7 @@ void test_middleware_valid_auth() {
         "!read[path=readme_md;cap=" + tool_token + "]\n";
 
     LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
-    AST ast = parser.parse(fix_chk(payload));
+    AST ast = parser.parse(stamp_chk(payload));
 
     LLMTOPMiddleware middleware(validator);
     auto plan = middleware.evaluate(ast);
@@ -47,7 +47,7 @@ void test_middleware_expired_token() {
         "[EXEC] tgt:src/main_file:cap=" + expired_token + "\n";
 
     LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
-    AST ast = parser.parse(fix_chk(payload));
+    AST ast = parser.parse(stamp_chk(payload));
 
     LLMTOPMiddleware middleware(validator);
     auto plan = middleware.evaluate(ast);
@@ -69,7 +69,7 @@ void test_middleware_invalid_signature() {
         "!read[path=readme_md;cap=" + bad_token + "]\n";
 
     LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
-    AST ast = parser.parse(fix_chk(payload));
+    AST ast = parser.parse(stamp_chk(payload));
 
     LLMTOPMiddleware middleware(validator);
     auto plan = middleware.evaluate(ast);
@@ -98,7 +98,7 @@ void test_middleware_tampered_payload() {
         "!read[path=readme_md;cap=" + tampered + "]\n";
 
     LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
-    AST ast = parser.parse(fix_chk(payload));
+    AST ast = parser.parse(stamp_chk(payload));
 
     LLMTOPMiddleware middleware(validator);
     auto plan = middleware.evaluate(ast);
@@ -157,7 +157,7 @@ void test_security_hardening() {
             "!read[path=readme_md;cap=" + cap + "]\n"; // AGT is attacker, token is for planner. Should be rejected!
 
         LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
-        AST ast = parser.parse(fix_chk(payload));
+        AST ast = parser.parse(stamp_chk(payload));
 
         // Default-on sub == agent_id check
         LLMTOPMiddleware middleware(validator, false); // allow_delegation = false
@@ -187,7 +187,7 @@ void test_security_hardening() {
             "!read[path=readme_md;cap=" + bad_token + "]\n";
 
         LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
-        AST ast = parser.parse(fix_chk(payload));
+        AST ast = parser.parse(stamp_chk(payload));
 
         LLMTOPMiddleware middleware(validator);
         auto plan = middleware.evaluate(ast);
@@ -214,12 +214,12 @@ void test_security_hardening() {
 
         LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
         
-        AST ast_bad = parser.parse(fix_chk(payload_bad));
+        AST ast_bad = parser.parse(stamp_chk(payload_bad));
         LLMTOPMiddleware middleware(validator);
         auto plan_bad = middleware.evaluate(ast_bad);
         CHECK(!(plan_bad.authorized));
 
-        AST ast_good = parser.parse(fix_chk(payload_good));
+        AST ast_good = parser.parse(stamp_chk(payload_good));
         auto plan_good = middleware.evaluate(ast_good);
         CHECK(plan_good.authorized);
         std::cout << "[PASS] test_security_hardening - iss and aud claims\n";
@@ -234,7 +234,7 @@ void test_security_hardening() {
         
         bool caught = false;
         try {
-            tiny_parser.parse(fix_chk(payload));
+            tiny_parser.parse(stamp_chk(payload));
         } catch (const std::runtime_error& e) {
             std::string msg = e.what();
             if (msg.find("Payload size exceeds") != std::string::npos) {
@@ -260,7 +260,7 @@ void test_security_hardening() {
             "!write[path=readme_md;cap=" + cap2 + "]\n";
 
         LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
-        AST ast = parser.parse(fix_chk(payload));
+        AST ast = parser.parse(stamp_chk(payload));
 
         LLMTOPMiddleware middleware(validator);
         auto plan = middleware.evaluate(ast);
@@ -271,7 +271,7 @@ void test_security_hardening() {
         std::string payload_ok = 
             "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req FALLBACK:json\n"
             "!read[path=readme_md;cap=" + cap1 + "]\n";
-        AST ast_ok = parser.parse(fix_chk(payload_ok));
+        AST ast_ok = parser.parse(stamp_chk(payload_ok));
         auto plan_ok = middleware.evaluate(ast_ok);
         CHECK(plan_ok.authorized);
 
@@ -287,7 +287,7 @@ void test_fail_open_default_deny() {
 
     // (a) Tool call with NO capability -> reject
     {
-        AST ast = parser.parse(fix_chk(
+        AST ast = parser.parse(stamp_chk(
             "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_fo1 FALLBACK:json\n"
             "!read[path=/etc/secrets]\n"));
         LLMTOPMiddleware middleware(validator);
@@ -297,7 +297,7 @@ void test_fail_open_default_deny() {
 
     // (b) tgt pointer with NO capability -> reject
     {
-        AST ast = parser.parse(fix_chk(
+        AST ast = parser.parse(stamp_chk(
             "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_fo2 FALLBACK:json\n"
             "[EXEC] tgt:src/secret.ts act:read\n"));
         LLMTOPMiddleware middleware(validator);
@@ -307,7 +307,7 @@ void test_fail_open_default_deny() {
 
     // (c) Pure planning statement (no tool, no pointer) -> allow
     {
-        AST ast = parser.parse(fix_chk(
+        AST ast = parser.parse(stamp_chk(
             "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_fo3 FALLBACK:json\n"
             "[PLAN] GL:refactor_auth act:plan\n"));
         LLMTOPMiddleware middleware(validator);
@@ -325,7 +325,7 @@ void test_checksum_integrity() {
 
     // Correct checksum -> integrity passes (pure-planning statement authorizes)
     {
-        AST ast = parser.parse(fix_chk(
+        AST ast = parser.parse(stamp_chk(
             "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_ck1 FALLBACK:json\n"
             "[PLAN] GL:do_thing\n"));
         LLMTOPMiddleware middleware(validator);
@@ -335,7 +335,7 @@ void test_checksum_integrity() {
 
     // Body tampered after CHK was computed -> integrity fails
     {
-        std::string good = fix_chk(
+        std::string good = stamp_chk(
             "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_ck2 FALLBACK:json\n"
             "[PLAN] GL:do_thing\n");
         std::string tampered = good;
@@ -363,7 +363,7 @@ void test_inband_ttl_is_not_a_control() {
 
     // A past ttl does not block a token whose signed exp is still valid.
     {
-        AST ast = parser.parse(fix_chk(
+        AST ast = parser.parse(stamp_chk(
             "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_ttl1 FALLBACK:json\n"
             "!read[path=readme_md;cap=" + live_cap + ";ttl=2000-01-01T00:00:00Z]\n"));
         LLMTOPMiddleware middleware(validator);
@@ -372,7 +372,7 @@ void test_inband_ttl_is_not_a_control() {
 
     // A future ttl does not rescue a token whose signed exp has passed.
     {
-        AST ast = parser.parse(fix_chk(
+        AST ast = parser.parse(stamp_chk(
             "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_ttl2 FALLBACK:json\n"
             "!read[path=readme_md;cap=" + dead_cap + ";ttl=2999-01-01T00:00:00Z]\n"));
         LLMTOPMiddleware middleware(validator);
@@ -390,7 +390,7 @@ void test_plan_carries_sanitized_arguments() {
     LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
     std::string cap = validator->create_token("planner", "execute:read:src/auth.ts", 9999999999LL);
 
-    AST ast = parser.parse(fix_chk(
+    AST ast = parser.parse(stamp_chk(
         "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_s9 FALLBACK:json\n"
         "!read[path=src/./sub/../auth.ts;cap=" + cap + "]\n"));
     LLMTOPMiddleware middleware(validator);
@@ -405,7 +405,7 @@ void test_plan_carries_sanitized_arguments() {
     CHECK_EQ(plan.approved_tools[0].args.at("path"), "src/auth.ts");
 
     // A rejected plan carries no approved entries at all.
-    AST denied = parser.parse(fix_chk(
+    AST denied = parser.parse(stamp_chk(
         "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_s9b FALLBACK:json\n"
         "!read[path=src/auth.ts]\n"));
     auto denied_plan = middleware.evaluate(denied);
@@ -423,7 +423,7 @@ void test_escaping_paths_are_refused() {
     // Deliberately the broadest possible grant: even '**' must not reach out.
     std::string cap = validator->create_token("planner", "**", 9999999999LL);
 
-    AST ast = parser.parse(fix_chk(
+    AST ast = parser.parse(stamp_chk(
         "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_esc FALLBACK:json\n"
         "!read[path=../../etc/passwd;cap=" + cap + "]\n"));
     LLMTOPMiddleware middleware(validator);
@@ -475,7 +475,7 @@ void test_tool_arg_binding() {
 
     // In-scope resource -> allow
     {
-        AST ast = parser.parse(fix_chk(
+        AST ast = parser.parse(stamp_chk(
             "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_ab1 FALLBACK:json\n"
             "!read[path=src/auth.ts;cap=" + cap + "]\n"));
         LLMTOPMiddleware middleware(validator);
@@ -485,7 +485,7 @@ void test_tool_arg_binding() {
 
     // Out-of-scope resource with the SAME token -> reject
     {
-        AST ast = parser.parse(fix_chk(
+        AST ast = parser.parse(stamp_chk(
             "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_ab2 FALLBACK:json\n"
             "!read[path=/etc/passwd;cap=" + cap + "]\n"));
         LLMTOPMiddleware middleware(validator);
@@ -504,7 +504,7 @@ void test_path_traversal_prevention() {
     std::string cap = validator->create_token("planner", "execute:read:src/*", 9999999999LL);
 
     // Traversal path attempting to break out of src/ -> MUST BE REJECTED
-    AST ast = parser.parse(fix_chk(
+    AST ast = parser.parse(stamp_chk(
         "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_pt1 FALLBACK:json\n"
         "!read[path=src/../../../etc/passwd;cap=" + cap + "]\n"));
 
@@ -525,7 +525,7 @@ void test_out_of_band_proxy_mode() {
         "[TASK] tgt:src/main.cpp act:refactor\n"
         "!read[path=src/main.cpp]\n";
 
-    AST ast = parser.parse(fix_chk(payload));
+    AST ast = parser.parse(stamp_chk(payload));
 
     // 1. Without proxy mode enabled -> MUST DEFAULT-DENY
     {
@@ -559,7 +559,7 @@ void test_out_of_band_proxy_mode() {
         std::string payload_unauth = 
             "VER:LLM-TOPv1 CHK:sha256:abcd AGT:subagent1 UID:anon TIM:2026-07-18 REQID:req_oob2 FALLBACK:json\n"
             "!read[path=/etc/shadow]\n";
-        AST ast_unauth = parser.parse(fix_chk(payload_unauth));
+        AST ast_unauth = parser.parse(stamp_chk(payload_unauth));
 
         LLMTOPMiddleware middleware(validator);
         middleware.set_out_of_band_proxy(true);
@@ -581,7 +581,7 @@ void test_idempotency_replay_protection() {
         "VER:LLM-TOPv1 CHK:sha256:abcd AGT:agent1 UID:anon TIM:2026-07-18 REQID:req_idempotent_1 FALLBACK:json\n"
         "!read[path=src/db.cpp;cap=" + tool_cap + "]\n";
 
-    AST ast = parser.parse(fix_chk(payload));
+    AST ast = parser.parse(stamp_chk(payload));
 
     LLMTOPMiddleware middleware(validator);
     middleware.set_enforce_idempotency(true);
@@ -599,7 +599,7 @@ void test_idempotency_replay_protection() {
     std::string payload2 = 
         "VER:LLM-TOPv1 CHK:sha256:abcd AGT:agent1 UID:anon TIM:2026-07-18 REQID:req_idempotent_2 FALLBACK:json\n"
         "!read[path=src/db.cpp;cap=" + tool_cap + "]\n";
-    AST ast2 = parser.parse(fix_chk(payload2));
+    AST ast2 = parser.parse(stamp_chk(payload2));
     auto plan3 = middleware.evaluate(ast2);
     CHECK(plan3.authorized);
 
@@ -702,7 +702,7 @@ void test_reqid_not_burned_by_rejection() {
     middleware.set_enforce_idempotency(true);
 
     // An unauthorized request must not consume its REQID.
-    AST bad = parser.parse(fix_chk(
+    AST bad = parser.parse(stamp_chk(
         "VER:LLM-TOPv1 CHK:sha256:abcd AGT:agent1 UID:u TIM:t REQID:req-42 FALLBACK:json\n"
         "!read[path=src/a.cpp]\n"));
     auto rejected = middleware.evaluate(bad);
@@ -710,7 +710,7 @@ void test_reqid_not_burned_by_rejection() {
 
     // The legitimate request carrying the same REQID must still go through.
     std::string cap = validator->create_token("agent1", "execute:read:*", 9999999999LL);
-    AST good = parser.parse(fix_chk(
+    AST good = parser.parse(stamp_chk(
         "VER:LLM-TOPv1 CHK:sha256:abcd AGT:agent1 UID:u TIM:t REQID:req-42 FALLBACK:json\n"
         "!read[path=src/a.cpp;cap=" + cap + "]\n"));
     auto accepted = middleware.evaluate(good);
@@ -756,7 +756,7 @@ void test_chk_covers_identity_header() {
     LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
     LLMTOPMiddleware middleware(validator);
 
-    const std::string signed_frame = fix_chk(
+    const std::string signed_frame = stamp_chk(
         "VER:LLM-TOPv1 CHK:sha256:abcd AGT:lowpriv UID:u1 TIM:2026-07-18 REQID:r1 FALLBACK:json\n"
         "[PLAN] GL:do_thing\n");
 
@@ -782,8 +782,88 @@ void test_chk_covers_identity_header() {
     std::cout << "[PASS] test_chk_covers_identity_header\n";
 }
 
+// The path an integrator actually walks, using only public API.
+//
+// Every other middleware test reached evaluate() through a private test helper
+// that stamped CHK. That hid the fact that a consumer building a frame had no
+// supported way to satisfy the integrity gate: evaluate() returned
+// ERR:integrity and the public API offered nothing to fix it. This test asserts
+// the supported flow works, so the gap cannot reopen silently.
+void test_integrator_can_satisfy_chk_with_public_api() {
+    auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
+    std::string tool_token = validator->create_token("gateway", "execute:read:*", 9999999999LL);
+
+    // A frame as a host would assemble it, with a placeholder checksum.
+    std::string frame =
+        "VER:LLM-TOPv1 CHK:sha256:PLACEHOLDER AGT:gateway UID:anon TIM:2026-07-18 REQID:pub1 FALLBACK:json\n"
+        "!read[path=src/main.cpp;cap=" + tool_token + "]\n";
+
+    // Unstamped, the middleware must refuse it -- the gate is real.
+    {
+        LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+        AST ast = parser.parse(frame);
+        LLMTOPMiddleware middleware(validator);
+        auto plan = middleware.evaluate(ast);
+        CHECK(!plan.authorized);
+        CHECK_CONTAINS(plan.error_message, std::string("integrity"));
+    }
+
+    // Stamped with the public helper, the same frame authorizes.
+    {
+        LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+        AST ast = parser.parse(stamp_chk(frame));
+        LLMTOPMiddleware middleware(validator);
+        auto plan = middleware.evaluate(ast);
+        CHECK(plan.authorized);
+        CHECK_EQ(plan.error_message, std::string(""));
+    }
+
+    // stamp_chk is idempotent: stamping an already-correct frame is a no-op,
+    // so a gateway that stamps defensively cannot corrupt a good frame.
+    CHECK_EQ(stamp_chk(stamp_chk(frame)), stamp_chk(frame));
+
+    // compute_chk agrees with what the middleware computes, which is what makes
+    // the two halves of this contract one definition rather than two.
+    {
+        std::string stamped = stamp_chk(frame);
+        LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+        AST ast = parser.parse(stamped);
+        CHECK_EQ(ast.header.chk, compute_chk(stamped));
+    }
+
+    // With verification off, an unstamped frame is accepted: the escape hatch
+    // for hosts where producer and verifier are the same process.
+    {
+        LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+        AST ast = parser.parse(frame);
+        LLMTOPMiddleware middleware(validator);
+        CHECK(middleware.verify_chk_enabled());   // on by default
+        middleware.set_verify_chk(false);
+        CHECK(!middleware.verify_chk_enabled());
+        auto plan = middleware.evaluate(ast);
+        CHECK(plan.authorized);
+    }
+
+    // Turning verification off must not weaken anything else: a frame with no
+    // capability at all is still refused.
+    {
+        std::string uncapped =
+            "VER:LLM-TOPv1 CHK:sha256:PLACEHOLDER AGT:gateway UID:anon TIM:2026-07-18 REQID:pub2 FALLBACK:json\n"
+            "!read[path=src/main.cpp]\n";
+        LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+        AST ast = parser.parse(uncapped);
+        LLMTOPMiddleware middleware(validator);
+        middleware.set_verify_chk(false);
+        auto plan = middleware.evaluate(ast);
+        CHECK(!plan.authorized);
+    }
+
+    std::cout << "[PASS] Integrator can satisfy CHK through the public API\n";
+}
+
 int main() {
     std::cout << "Running LLM-TOP Middleware Tests (Real HMAC-SHA256)...\n";
+    test_integrator_can_satisfy_chk_with_public_api();
     test_chk_covers_identity_header();
     test_reqid_not_burned_by_rejection();
     test_idempotency_store_expiry_and_capacity();

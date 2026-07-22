@@ -41,6 +41,12 @@ reproducible from `benchmarker_real.cpp` in this repository — see
 > with its own field zeroed. It is **unkeyed**, so it detects truncation and corruption — it is not
 > an authentication mechanism, because anyone modifying a frame can recompute it. Authentication
 > comes from capabilities.
+>
+> A model cannot compute SHA-256 over its own output, so **an LLM-generated frame never carries a
+> valid `CHK`**. Producers stamp it with `stamp_chk()` (`chk.hpp`); hosts whose producer and
+> verifier are the same process can turn the check off with `set_verify_chk(false)`, since a digest
+> compared against memory that never crossed a boundary detects nothing. Verification is **on by
+> default**.
 
 ---
 
@@ -52,6 +58,7 @@ Header-only C++20. No runtime dependencies.
 - `middleware.hpp`: Execution arbiter — JWT validation, capability authorization, path confinement,
   out-of-band session proxy mode, `IdempotencyStore`.
 - `schema_validator.hpp`: Per-role statement schema validation.
+- `chk.hpp`: Producer-side integrity helpers — `stamp_chk()` / `compute_chk()`.
 - `tokenizer.hpp`: Self-contained `cl100k_base` (tiktoken) BPE tokenizer. ASCII-only by design, and
   it **rejects** non-ASCII input rather than silently mis-counting it.
 - `binary_encoder.hpp`: Loss-free binary serializer for the **host↔host** leg (see caveat below).

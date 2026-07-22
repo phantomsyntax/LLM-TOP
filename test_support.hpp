@@ -3,27 +3,19 @@
 // Assertion machinery lives in test_harness.hpp; this header is about payloads.
 #include <string>
 #include "sha256.hpp"
-#include "parser_v2.hpp"   // canonical_for_chk
+#include "chk.hpp"   // stamp_chk -- the public producer API the tests now use
 
 namespace llmtop_test {
 
 // Shared secret used by every test that mints capability tokens.
 inline const std::string kTestSecret = "llm-top-test-secret-key-2026";
 
-// Rewrite the CHK digest of a hand-written payload so it satisfies the
-// middleware's integrity check. Uses the same canonicalization the verifier
-// does, so what CHK covers is defined in exactly one place.
-inline std::string fix_chk(std::string payload) {
-    std::string real = SHA256::hash_hex(canonical_for_chk(payload));
-    const std::string marker = "CHK:sha256:";
-    size_t p = payload.find(marker);
-    if (p != std::string::npos) {
-        size_t start = p + marker.size();
-        size_t end = payload.find_first_of(" \r\n", start);
-        if (end == std::string::npos) end = payload.size();
-        payload.replace(start, end - start, real);
-    }
-    return payload;
-}
+// NOTE: this header used to carry a private fix_chk() that stamped the CHK
+// digest onto a payload. That was the *only* implementation of the producer
+// side, so every middleware test satisfied the integrity gate through a door no
+// consumer of this library had -- which is exactly why it went unnoticed that
+// evaluate() could not accept any frame an integrator could build. The stamping
+// logic now lives in chk.hpp as stamp_chk(), and the tests call that, so the
+// suite exercises the same path a consumer does.
 
 } // namespace llmtop_test

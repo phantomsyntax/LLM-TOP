@@ -1,6 +1,7 @@
 #pragma once
 #include "parser_v2.hpp"
 #include "sha256.hpp"
+#include "chk.hpp"
 #include "time_utils.hpp"
 #include <iostream>
 #include <chrono>
@@ -600,6 +601,29 @@ public:
         session_granted_scopes_.erase(agent_id);
     }
 
+    // Enable or disable CHK integrity verification. On by default.
+    //
+    // CHK is an unkeyed digest, so it detects accidents (truncation, a mangled
+    // copy) and not attackers, who simply recompute it. That makes it valuable
+    // exactly where a frame crosses a boundary both sides compute over -- a
+    // gateway on one host, an enforcement service on another.
+    //
+    // Turn it off when the producer and the verifier are the same process. There
+    // the frame never crossed anything, so stamping it with stamp_chk() and then
+    // verifying it here checks a hash against memory that was never at risk. It
+    // costs a SHA-256 over every frame to learn nothing.
+    //
+    // Note an LLM cannot compute SHA-256 over its own output, so a frame taken
+    // straight from a model never carries a valid CHK. Either stamp it at ingest
+    // with stamp_chk() (see chk.hpp) or turn this off for that leg.
+    void set_verify_chk(bool enable) {
+        verify_chk_ = enable;
+    }
+
+    bool verify_chk_enabled() const {
+        return verify_chk_;
+    }
+
     // Enable or disable idempotency enforcement (replay protection)
     void set_enforce_idempotency(bool enable) {
         enforce_idempotency_ = enable;
@@ -628,11 +652,15 @@ public:
             return plan;
         }
 
-        // 1b. Verify payload integrity: CHK header must equal sha256 of the body.
-        std::string computed_chk = "sha256:" + SHA256::hash_hex(canonical_for_chk(ast.raw_frame));
-        if (ast.header.chk != computed_chk) {
-            plan.error_message = "ERR:integrity - checksum mismatch";
-            return plan;
+        // 1b. Verify payload integrity: CHK must equal sha256 of the canonical
+        // frame. Producers stamp this with stamp_chk() (chk.hpp); see
+        // set_verify_chk() for when this check is worth paying for at all.
+        if (verify_chk_) {
+            std::string computed_chk = compute_chk(ast.raw_frame);
+            if (ast.header.chk != computed_chk) {
+                plan.error_message = "ERR:integrity - checksum mismatch";
+                return plan;
+            }
         }
 
         // 1c. Replay protection: reject a REQID that has already been executed.
@@ -778,6 +806,7 @@ private:
     // reconfiguring the middleware; the class advertises thread safety.
     std::atomic<bool> out_of_band_proxy_mode_{false};
     std::atomic<bool> enforce_idempotency_{false};
+    std::atomic<bool> verify_chk_{true};
     IdempotencyStore idempotency_store_;
     std::unordered_map<std::string, std::vector<std::string>> session_granted_scopes_;
     mutable std::mutex session_mutex_;
