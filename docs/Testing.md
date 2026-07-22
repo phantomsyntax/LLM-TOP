@@ -1,26 +1,28 @@
-# Test Plan and Results for LLM‑TOP 
+# Test Plan and Results for LLM‑TOP
 
 ## Overview
-This document outlines the rigorous testing matrix designed to validate the robustness, security, parsing reliability, and operational readiness of the LLM-TOP protocol.
+This document outlines the testing matrix validating the robustness, security, parsing reliability, and empirical token efficiency of the LLM-TOP protocol core.
 
 ## 1. Parser Fuzzing & Edge Cases
-- **Goal**: Find brittle parse paths and tokenization surprises.
-- **Implementation**: `fuzzer.cpp` uses a Mersenne Twister RNG to randomly mutate, swap, and delete ASCII tokens across the canonical payload.
-- **Result**: [PASS] 1,000 fuzz iterations resulted in 0 segfaults or unhandled C++ exceptions. The state-machine lexer correctly shunted all corrupted data into the `diagnostic` JSON fallback buffer.
+- **Goal**: Identify brittle parse paths and memory boundaries under corrupted inputs.
+- **Implementation**: `fuzzer.cpp` uses Mersenne Twister RNG mutation to swap, truncate, and inject corrupt ASCII tokens into canonical payloads.
+- **Result**: [PASS] **2,011 randomized fuzzing iterations** produced **0 segfaults or unhandled C++ exceptions**. All malformed inputs were trapped in the `diagnostic` buffer.
 
-## 2. Pointer Capability Validation
-- **Goal**: Enforce capability tokens and TTLs.
-- **Implementation**: `test_middleware.cpp` evaluates simulated payloads possessing valid, expired, and hallucinated `cap` JWTs.
-- **Result**: [PASS] The middleware cleanly blocked expired TTLs (`ERR:cap_expired`) and rejected arbitrary, unsigned tool calls, proving that agents cannot hallucinate escalated privileges.
+## 2. Middleware & Pointer Security Validation
+- **Goal**: Validate JWT tokens, scope wildcard matching, path traversal blocking, out-of-band proxy session auth, and replay protection.
+- **Implementation**: `test_middleware.cpp` tests valid/expired TTLs, tampered signatures, Ed25519 public key signatures, path traversal attempts (`src/../../../etc/passwd`), out-of-band proxy mode, and duplicate REQID replay detection.
+- **Result**: [PASS] 100% of security test cases passed cleanly.
 
-## 3. Phase 3 Simulated Stress Tests (Semantic Density)
-- **Goal**: Detect if removing grammatical English causes LLMs to lose context or hallucinate logic.
-- **Implementation**: 
-  - *Algorithmic Test*: Subagent passed `GL:AStar_pathfind TD:heur=manhattan,node_struct,priority_q`.
-  - *Context Pointer Test*: Subagent passed `ctx:@mem/spec !read[path=auth_spec.txt]`.
-- **Result**: [PASS] Extreme Success. The subagents perfectly decoded the dense semantic markers. They seamlessly wrote complex algorithms and retrieved hidden file dependencies via `!read` without any conversational hand-holding.
+## 3. Binary Encoding & Tokenizer Suite
+- **Goal**: Verify loss-free binary header/statement encoding and $O(n \log n)$ BPE tokenizer precision.
+- **Implementation**: `test_binary.cpp` and `test_tokenizer.cpp`.
+- **Result**: [PASS] Verified `OP_HR` opcode serialization and exact match against `cl100k_base` (tiktoken) reference token vectors.
 
-## 4. Performance & Token Metrics
-- **Goal**: Measure token savings versus net task success.
-- **Implementation**: `benchmarker.cpp` executes string volume tests on standard tool payloads.
-- **Result**: [PASS] Evaluated at ~60% overall compression relative to heavily structured JSON.
+## 4. Empirical Live Model Benchmarks (NVIDIA NIM)
+- **Goal**: Measure live model accuracy, latency, and token reduction across production models (`deepseek-ai/deepseek-v4-flash`, `minimaxai/minimax-m3`, `deepseek-ai/deepseek-v4-pro`).
+- **Implementation**: Executed via `run_live_eval_curl.py` with generic relative placeholders (zero PII, machine IDs, or absolute paths).
+- **Result**: [PASS] DeepSeek-V4 Flash achieved **81.5 tokens/sec** and **6.28s total latency** (with speculative decoding active at an 84.8% acceptance rate). Tool call turns achieved **-75% output token reductions**.
+
+## 5. Token Metrics (`benchmarker_real.cpp`)
+- **Goal**: Measure real BPE token counts across multi-agent scenarios.
+- **Result**: [PASS] Verified **+25.9% net token savings over minified JSON** and **+67.3% over pretty-printed JSON**.

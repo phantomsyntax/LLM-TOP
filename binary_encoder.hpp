@@ -62,7 +62,8 @@ public:
     std::vector<uint8_t> encode_header(const std::string& ver, const std::string& chk,
                                        const std::string& agt, const std::string& uid,
                                        const std::string& tim, const std::string& reqid,
-                                       const std::string& fallback = "") {
+                                       const std::string& fallback = "",
+                                       uint32_t hr = 0) {
         std::vector<uint8_t> buffer;
         
         // Magic bytes: "LLMT" (0x4C 0x4C 0x4D 0x54)
@@ -84,6 +85,9 @@ public:
         
         if (!fallback.empty()) {
             encode_string(buffer, static_cast<uint8_t>(Opcode::OP_FALLBACK), fallback);
+        }
+        if (hr > 0) {
+            encode_string(buffer, static_cast<uint8_t>(Opcode::OP_HR), std::to_string(hr));
         }
 
         return buffer;

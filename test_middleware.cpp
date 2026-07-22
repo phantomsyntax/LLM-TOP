@@ -442,6 +442,116 @@ void test_tool_arg_binding() {
     std::cout << "[PASS] test_tool_arg_binding\n";
 }
 
+void test_path_traversal_prevention() {
+    auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
+    LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+
+    // Token grants read access to src/* only.
+    std::string cap = validator->create_token("planner", "execute:read:src/*", 9999999999LL);
+
+    // Traversal path attempting to break out of src/ -> MUST BE REJECTED
+    AST ast = parser.parse(fix_chk(
+        "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_pt1 FALLBACK:json\n"
+        "!read[path=src/../../../etc/passwd;cap=" + cap + "]\n"));
+
+    LLMTOPMiddleware middleware(validator);
+    auto plan = middleware.evaluate(ast);
+
+    assert(plan.authorized == false);
+    std::cout << "[PASS] test_path_traversal_prevention\n";
+}
+
+void test_out_of_band_proxy_mode() {
+    auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
+    LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+
+    // Payload WITHOUT inline cap= tokens (Out-of-Band Auth stream)
+    std::string payload = 
+        "VER:LLM-TOPv1 CHK:sha256:abcd AGT:subagent1 UID:anon TIM:2026-07-18 REQID:req_oob1 FALLBACK:json\n"
+        "[TASK] tgt:src/main.cpp act:refactor\n"
+        "!read[path=src/main.cpp]\n";
+
+    AST ast = parser.parse(fix_chk(payload));
+
+    // 1. Without proxy mode enabled -> MUST DEFAULT-DENY
+    {
+        LLMTOPMiddleware middleware(validator);
+        auto plan = middleware.evaluate(ast);
+        assert(plan.authorized == false);
+        assert(plan.error_message.find("ERR:cap_required") != std::string::npos);
+    }
+
+    // 2. With proxy mode enabled, but agent has NO session grants -> MUST DENY
+    {
+        LLMTOPMiddleware middleware(validator);
+        middleware.set_out_of_band_proxy(true);
+        auto plan = middleware.evaluate(ast);
+        assert(plan.authorized == false);
+    }
+
+    // 3. With proxy mode enabled AND session capabilities granted to host proxy -> MUST AUTHORIZE
+    {
+        LLMTOPMiddleware middleware(validator);
+        middleware.set_out_of_band_proxy(true);
+        middleware.grant_session_capability("subagent1", "read:src/main.cpp");
+        middleware.grant_session_capability("subagent1", "execute:read:src/main.cpp");
+        auto plan = middleware.evaluate(ast);
+        assert(plan.authorized == true);
+        assert(plan.approved_actions.size() == 2);
+    }
+
+    // 4. Out-of-scope request via proxy mode -> MUST DENY
+    {
+        std::string payload_unauth = 
+            "VER:LLM-TOPv1 CHK:sha256:abcd AGT:subagent1 UID:anon TIM:2026-07-18 REQID:req_oob2 FALLBACK:json\n"
+            "!read[path=/etc/shadow]\n";
+        AST ast_unauth = parser.parse(fix_chk(payload_unauth));
+
+        LLMTOPMiddleware middleware(validator);
+        middleware.set_out_of_band_proxy(true);
+        middleware.grant_session_capability("subagent1", "execute:read:src/*");
+        auto plan = middleware.evaluate(ast_unauth);
+        assert(plan.authorized == false);
+    }
+
+    std::cout << "[PASS] test_out_of_band_proxy_mode\n";
+}
+
+void test_idempotency_replay_protection() {
+    auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
+    LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+
+    std::string tool_cap = validator->create_token("agent1", "execute:read:*", 9999999999LL);
+
+    std::string payload = 
+        "VER:LLM-TOPv1 CHK:sha256:abcd AGT:agent1 UID:anon TIM:2026-07-18 REQID:req_idempotent_1 FALLBACK:json\n"
+        "!read[path=src/db.cpp;cap=" + tool_cap + "]\n";
+
+    AST ast = parser.parse(fix_chk(payload));
+
+    LLMTOPMiddleware middleware(validator);
+    middleware.set_enforce_idempotency(true);
+
+    // 1st Execution -> MUST SUCCEED
+    auto plan1 = middleware.evaluate(ast);
+    assert(plan1.authorized == true);
+
+    // 2nd Execution with SAME agent & REQID -> MUST BE REJECTED (REPLAY)
+    auto plan2 = middleware.evaluate(ast);
+    assert(plan2.authorized == false);
+    assert(plan2.error_message.find("ERR:replay_detected") != std::string::npos);
+
+    // Different REQID -> MUST SUCCEED
+    std::string payload2 = 
+        "VER:LLM-TOPv1 CHK:sha256:abcd AGT:agent1 UID:anon TIM:2026-07-18 REQID:req_idempotent_2 FALLBACK:json\n"
+        "!read[path=src/db.cpp;cap=" + tool_cap + "]\n";
+    AST ast2 = parser.parse(fix_chk(payload2));
+    auto plan3 = middleware.evaluate(ast2);
+    assert(plan3.authorized == true);
+
+    std::cout << "[PASS] test_idempotency_replay_protection\n";
+}
+
 int main() {
     std::cout << "Running LLM-TOP Middleware Tests (Real HMAC-SHA256)...\n";
     test_fail_open_default_deny();
@@ -449,6 +559,9 @@ int main() {
     test_ttl_enforcement();
     test_create_token_no_json_injection();
     test_tool_arg_binding();
+    test_path_traversal_prevention();
+    test_out_of_band_proxy_mode();
+    test_idempotency_replay_protection();
     test_base64url_roundtrip();
     test_middleware_valid_auth();
     test_middleware_expired_token();

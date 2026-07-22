@@ -8,6 +8,7 @@
 #include <climits>
 #include <array>
 #include <cctype>
+#include <queue>
 
 // Self-contained cl100k_base (tiktoken) BPE tokenizer.
 //
@@ -138,34 +139,91 @@ private:
     // Byte-pair merge one pre-token, appending resulting token ids to `out`.
     // tiktoken's algorithm: start from single bytes, repeatedly merge the adjacent
     // pair with the lowest rank until no adjacent pair is mergeable.
-    void bpe(const std::string& piece, std::vector<int>& out) const {
-        std::vector<std::string> parts;
-        parts.reserve(piece.size());
-        for (unsigned char ch : piece) parts.emplace_back(1, (char)ch);
+#include <queue>
 
-        while (parts.size() > 1) {
-            int best_rank = INT_MAX;
-            size_t best_i = SIZE_MAX;
-            for (size_t k = 0; k + 1 < parts.size(); k++) {
-                auto it = ranks_.find(parts[k] + parts[k + 1]);
-                if (it != ranks_.end() && it->second < best_rank) {
-                    best_rank = it->second;
-                    best_i = k;
-                }
-            }
-            if (best_i == SIZE_MAX) break; // nothing left to merge
-            parts[best_i] += parts[best_i + 1];
-            parts.erase(parts.begin() + best_i + 1);
+    struct MergePair {
+        int rank;
+        size_t index;
+        bool operator>(const MergePair& other) const {
+            if (rank != other.rank) return rank > other.rank;
+            return index > other.index;
+        }
+    };
+
+    // Byte-pair merge one pre-token, appending resulting token ids to `out`.
+    // Fast O(n log n) priority queue implementation matching tiktoken's min-rank pair selection.
+    void bpe(const std::string& piece, std::vector<int>& out) const {
+        if (piece.empty()) return;
+        if (piece.size() == 1) {
+            auto it = ranks_.find(piece);
+            if (it == ranks_.end()) throw std::runtime_error("Cl100kTokenizer: byte sequence not in ranks");
+            out.push_back(it->second);
+            return;
         }
 
-        for (const auto& part : parts) {
-            auto it = ranks_.find(part);
-            if (it == ranks_.end()) {
-                // Every single byte is present in cl100k_base, so this only fires on
-                // truly unexpected input; fail loudly rather than emit a bogus id.
-                throw std::runtime_error("Cl100kTokenizer: byte sequence not in ranks");
+        struct Node {
+            std::string str;
+            size_t prev;
+            size_t next;
+            bool active = true;
+        };
+
+        std::vector<Node> nodes(piece.size());
+        for (size_t i = 0; i < piece.size(); ++i) {
+            nodes[i].str = std::string(1, piece[i]);
+            nodes[i].prev = (i == 0) ? SIZE_MAX : i - 1;
+            nodes[i].next = (i + 1 < piece.size()) ? i + 1 : SIZE_MAX;
+        }
+
+        std::priority_queue<MergePair, std::vector<MergePair>, std::greater<MergePair>> pq;
+
+        auto check_pair = [&](size_t i) {
+            if (i == SIZE_MAX || nodes[i].next == SIZE_MAX || !nodes[i].active || !nodes[nodes[i].next].active) return;
+            auto it = ranks_.find(nodes[i].str + nodes[nodes[i].next].str);
+            if (it != ranks_.end()) {
+                pq.push({it->second, i});
             }
-            out.push_back(it->second);
+        };
+
+        for (size_t i = 0; i + 1 < piece.size(); ++i) {
+            check_pair(i);
+        }
+
+        while (!pq.empty()) {
+            auto top = pq.top();
+            pq.pop();
+
+            size_t i = top.index;
+            if (!nodes[i].active || nodes[i].next == SIZE_MAX || !nodes[nodes[i].next].active) continue;
+
+            // Re-verify current rank matches
+            size_t j = nodes[i].next;
+            auto it = ranks_.find(nodes[i].str + nodes[j].str);
+            if (it == ranks_.end() || it->second != top.rank) continue;
+
+            // Perform merge of nodes[i] and nodes[j]
+            nodes[i].str += nodes[j].str;
+            nodes[j].active = false;
+            nodes[i].next = nodes[j].next;
+            if (nodes[j].next != SIZE_MAX) {
+                nodes[nodes[j].next].prev = i;
+            }
+
+            // Push updated neighbor pairs
+            check_pair(nodes[i].prev);
+            check_pair(i);
+        }
+
+        size_t curr = 0;
+        while (curr != SIZE_MAX) {
+            if (nodes[curr].active) {
+                auto it = ranks_.find(nodes[curr].str);
+                if (it == ranks_.end()) {
+                    throw std::runtime_error("Cl100kTokenizer: byte sequence not in ranks");
+                }
+                out.push_back(it->second);
+            }
+            curr = nodes[curr].next;
         }
     }
 

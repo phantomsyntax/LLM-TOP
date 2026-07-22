@@ -40,7 +40,7 @@ This document serves as the formal specification for the LLM-TOP parser.
 <key>   ::= <string_no_reserved>
 <value> ::= <string_no_reserved> | <pointer> | <quoted_string>
 
-<pointer> ::= <pointer_base> ":" "cap=" <jwt> ";" "ttl=" <iso_8601>
+<pointer> ::= <pointer_base> [ ":" "cap=" <jwt> ] [ ";" "ttl=" <iso_8601> ]
 <pointer_base> ::= <file_path> [ "#L" <line_range> ] | "@mem/" <digit> { <digit> }
 
 <string_no_reserved> ::= { ASCII character excluding " ", "[", "]", "!", ">", ":", ";", "=" }
@@ -50,5 +50,8 @@ This document serves as the formal specification for the LLM-TOP parser.
 
 ## Parsing Rules
 1. **Strict Mode**: A parser MUST reject the payload if the header is missing any mandatory fields (VER, CHK, AGT, UID, TIM, REQID).
-2. **Tolerant Mode**: A parser MAY attempt to parse remaining statements if a statement fails to parse, but it must flag the payload with `ERR:parse`.
-3. **Capabilities**: Pointers without a valid capability token (`cap`) and time-to-live (`ttl`) should be treated as untrusted and optionally discarded or blocked by the execution environment.
+2. **Tolerant Mode**: A parser MAY attempt to parse remaining statements if a statement fails to parse, capturing healing warnings in a `diagnostic` buffer.
+3. **Capabilities**:
+   - **In-Band Mode**: Pointers and tool calls carrying `cap=` tokens are cryptographically verified via HMAC-SHA256 or Ed25519 public key signatures.
+   - **Out-of-Band Proxy Mode**: When inline `cap=` tokens are omitted, the host proxy (`LLMTOPMiddleware`) verifies actions against host-managed session capability grants bound to `AGT`.
+4. **Idempotency**: Requests matching a previously executed `(AGT, REQID)` tuple are blocked by `IdempotencyStore` to prevent replay attacks.

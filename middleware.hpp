@@ -10,6 +10,8 @@
 #include <memory>
 #include <array>
 #include <vector>
+#include <deque>
+#include <string_view>
 #include <sstream>
 
 // Real JWT validator for capability tokens using HMAC-SHA256.
@@ -27,6 +29,12 @@ public:
         int64_t exp;            // Expiration timestamp (Unix epoch)
         bool valid = false;
     };
+
+    enum class Algorithm { HS256, Ed25519 };
+
+    void set_public_key(const std::string& public_key_b64) {
+        public_key_b64_ = public_key_b64;
+    }
 
     // Initialize validator with a shared secret key for HMAC-SHA256
     SimpleJWTValidator(const std::string& shared_secret = "", 
@@ -93,11 +101,11 @@ public:
 
         if (signature_b64.empty()) return claim;
 
-        // Step 1: Decode header and verify alg is exactly HS256
+        // Step 1: Decode header and verify alg is HS256 or Ed25519
         std::string decoded_header = base64url_decode(header_b64);
         std::string alg = extract_string_claim(decoded_header, "alg");
-        if (alg != "HS256") {
-            return claim; // Reject none and other algs
+        if (alg != "HS256" && alg != "Ed25519") {
+            return claim; // Reject none and unsupported algs
         }
 
         // Step 2: Verify HMAC-SHA256 signature
@@ -231,49 +239,102 @@ public:
         return result;
     }
 
-private:
-    std::string shared_secret_;
-    std::string expected_iss_;
-    std::string expected_aud_;
+public:
+    static std::string normalize_path_segment(const std::string& path_str) {
+        if (path_str.empty()) return "";
+        std::string s = path_str;
+        for (char& c : s) { if (c == '\\') c = '/'; }
 
-    static std::vector<std::string> split_scope(const std::string& s, char delim) {
-        std::vector<std::string> result;
-        std::stringstream ss(s);
-        std::string item;
-        while (std::getline(ss, item, delim)) {
-            result.push_back(item);
+        std::vector<std::string> segments;
+        size_t start = 0;
+        while (start < s.length()) {
+            size_t end = s.find('/', start);
+            if (end == std::string::npos) end = s.length();
+            std::string seg = s.substr(start, end - start);
+            start = end + 1;
+            if (seg.empty() || seg == ".") continue;
+            if (seg == "..") {
+                if (!segments.empty() && segments.back() != "..") {
+                    segments.pop_back();
+                } else {
+                    segments.push_back(seg);
+                }
+            } else {
+                segments.push_back(seg);
+            }
+        }
+        std::string res;
+        if (!s.empty() && s[0] == '/') res = "/";
+        for (size_t i = 0; i < segments.size(); ++i) {
+            if (i > 0) res += "/";
+            res += segments[i];
+        }
+        return res;
+    }
+
+    static std::vector<std::string_view> split_scope_sv(std::string_view s, char delim) {
+        std::vector<std::string_view> result;
+        size_t start = 0;
+        while (start < s.length()) {
+            size_t end = s.find(delim, start);
+            if (end == std::string_view::npos) end = s.length();
+            result.push_back(s.substr(start, end - start));
+            start = end + 1;
         }
         return result;
     }
 
     // Check if scope pattern matches requested resource (split on :, * matches one segment)
-    bool scope_matches(const std::string& granted, const std::string& requested) {
-        auto g_segs = split_scope(granted, ':');
-        auto r_segs = split_scope(requested, ':');
+    static bool scope_matches(const std::string& granted, const std::string& requested) {
+        auto g_segs = split_scope_sv(granted, ':');
+        auto r_segs = split_scope_sv(requested, ':');
         if (g_segs.size() != r_segs.size()) return false;
         for (size_t i = 0; i < g_segs.size(); ++i) {
             if (g_segs[i] == "*") continue;
-            if (g_segs[i].find('*') != std::string::npos) {
-                std::string pattern = g_segs[i].substr(0, g_segs[i].find('*'));
-                if (r_segs[i].substr(0, pattern.length()) != pattern) {
+            
+            std::string g_norm = normalize_path_segment(std::string(g_segs[i]));
+            std::string r_norm = normalize_path_segment(std::string(r_segs[i]));
+
+            if (g_norm.find('*') != std::string::npos) {
+                std::string pattern = g_norm.substr(0, g_norm.find('*'));
+                if (r_norm.substr(0, pattern.length()) != pattern) {
                     return false;
                 }
-            } else if (g_segs[i] != r_segs[i]) {
+            } else if (g_norm != r_norm) {
                 return false;
             }
         }
         return true;
     }
 
-    // Extract a string claim value from simplified JSON
+private:
+    std::string shared_secret_;
+    std::string public_key_b64_;
+    std::string expected_iss_;
+    std::string expected_aud_;
+
+    // Extract a string claim value from simplified JSON (escape-aware)
     std::string extract_string_claim(const std::string& json, const std::string& key) {
         std::string search = "\"" + key + "\":\"";
         size_t pos = json.find(search);
         if (pos == std::string::npos) return "";
         size_t start = pos + search.length();
-        size_t end = json.find('"', start);
-        if (end == std::string::npos) return "";
-        return json.substr(start, end - start);
+        std::string val;
+        bool escaped = false;
+        for (size_t i = start; i < json.length(); ++i) {
+            char c = json[i];
+            if (escaped) {
+                val += c;
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == '"') {
+                return val;
+            } else {
+                val += c;
+            }
+        }
+        return "";
     }
 
     // Extract an integer claim value from simplified JSON
@@ -292,6 +353,42 @@ private:
     }
 };
 
+class IdempotencyStore {
+public:
+    explicit IdempotencyStore(size_t max_entries = 1000) : max_entries_(max_entries) {}
+
+    // Record a request ID for an agent. Returns true if unique (not replayed), false if duplicate/replayed.
+    bool record_request(const std::string& agent_id, const std::string& reqid, const std::string& checksum) {
+        std::string key = agent_id + ":" + reqid;
+        if (seen_requests_.find(key) != seen_requests_.end()) {
+            return false; // Replay detected!
+        }
+        if (history_.size() >= max_entries_) {
+            std::string oldest = history_.front();
+            history_.pop_front();
+            seen_requests_.erase(oldest);
+        }
+        seen_requests_[key] = checksum;
+        history_.push_back(key);
+        return true;
+    }
+
+    bool is_replayed(const std::string& agent_id, const std::string& reqid) const {
+        std::string key = agent_id + ":" + reqid;
+        return seen_requests_.find(key) != seen_requests_.end();
+    }
+
+    void clear() {
+        seen_requests_.clear();
+        history_.clear();
+    }
+
+private:
+    size_t max_entries_;
+    std::unordered_map<std::string, std::string> seen_requests_;
+    std::deque<std::string> history_;
+};
+
 
 class LLMTOPMiddleware {
 public:
@@ -305,6 +402,36 @@ public:
     LLMTOPMiddleware(std::shared_ptr<SimpleJWTValidator> jwt_validator = nullptr, bool allow_delegation = false)
         : jwt_validator_(jwt_validator ? jwt_validator : std::make_shared<SimpleJWTValidator>()),
           allow_delegation_(allow_delegation) {}
+
+    // Enable or disable host out-of-band proxy mode (where capabilities are host-managed by session ID/agent)
+    void set_out_of_band_proxy(bool enable) {
+        out_of_band_proxy_mode_ = enable;
+    }
+
+    bool out_of_band_proxy_enabled() const {
+        return out_of_band_proxy_mode_;
+    }
+
+    void grant_session_capability(const std::string& agent_id, const std::string& scope) {
+        session_granted_scopes_[agent_id].push_back(scope);
+    }
+
+    void revoke_session_capabilities(const std::string& agent_id) {
+        session_granted_scopes_.erase(agent_id);
+    }
+
+    // Enable or disable idempotency enforcement (replay protection)
+    void set_enforce_idempotency(bool enable) {
+        enforce_idempotency_ = enable;
+    }
+
+    bool enforce_idempotency_enabled() const {
+        return enforce_idempotency_;
+    }
+
+    void clear_idempotency_store() {
+        idempotency_store_.clear();
+    }
 
     ExecutionPlan evaluate(const AST& ast, bool accept_healed = false) {
         ExecutionPlan plan;
@@ -328,6 +455,12 @@ public:
             return plan;
         }
 
+        // 1c. Replay protection (if enabled)
+        if (enforce_idempotency_ && !idempotency_store_.record_request(ast.header.agt, ast.header.reqid, ast.header.chk)) {
+            plan.error_message = "ERR:replay_detected - Request ID '" + ast.header.reqid + "' has already been executed for agent '" + ast.header.agt + "'";
+            return plan;
+        }
+
         std::vector<const std::vector<Statement>*> batches = { &ast.statements };
         if (accept_healed && !ast.healed_draft.empty()) {
             batches.push_back(&ast.healed_draft);
@@ -335,53 +468,74 @@ public:
 
         for (const auto* batch : batches) {
             for (const auto& stmt : *batch) {
-                // 2. Default-deny: every pointer field MUST carry a valid capability.
-                //    Non-pointer fields (act, GL, TD, ctx, ...) are not capability-gated.
+                // 2. Default-deny: every pointer field MUST carry a valid capability (or host proxy grant).
                 for (const auto& kv : stmt.kvpairs) {
                     if (!is_pointer_key(kv.first)) continue;
 
-                    if (kv.second.find("cap=") == std::string::npos) {
+                    std::string resource = extract_resource_path(kv.second);
+                    if (kv.second.find("cap=") != std::string::npos) {
+                        // In-band JWT token present
+                        if (!ttl_valid(extract_ttl(kv.second))) {
+                            plan.error_message = "ERR:cap_invalid_or_expired - ttl for target: " + kv.first;
+                            return plan;
+                        }
+                        std::string cap_token = extract_capability_token(kv.second);
+
+                        if (!validate_capability(cap_token, resource, ast.header.agt)) {
+                            plan.error_message = "ERR:cap_invalid_or_expired for target: " + kv.first;
+                            return plan;
+                        }
+                        plan.approved_actions.push_back("READ/WRITE authorized for " + resource);
+                    } else if (out_of_band_proxy_mode_) {
+                        // Out-of-band proxy mode: check host session capability grant
+                        if (!validate_proxy_capability(ast.header.agt, "read:" + resource) &&
+                            !validate_proxy_capability(ast.header.agt, "write:" + resource) &&
+                            !validate_proxy_capability(ast.header.agt, resource)) {
+                            plan.error_message = "ERR:cap_required - target '" + kv.first + "' (" + resource +
+                                                 ") not authorized for agent '" + ast.header.agt + "' in proxy session";
+                            return plan;
+                        }
+                        plan.approved_actions.push_back("READ/WRITE authorized (out-of-band proxy) for " + resource);
+                    } else {
                         plan.error_message = "ERR:cap_required - pointer field '" + kv.first +
                                              "' has no capability token";
                         return plan;
                     }
-                    if (!ttl_valid(extract_ttl(kv.second))) {
-                        plan.error_message = "ERR:cap_invalid_or_expired - ttl for target: " + kv.first;
-                        return plan;
-                    }
-                    std::string cap_token = extract_capability_token(kv.second);
-                    std::string resource = extract_resource_path(kv.second);
-
-                    if (!validate_capability(cap_token, resource, ast.header.agt)) {
-                        plan.error_message = "ERR:cap_invalid_or_expired for target: " + kv.first;
-                        return plan;
-                    }
-                    plan.approved_actions.push_back("READ/WRITE authorized for " + resource);
                 }
 
-                // 3. Default-deny: every tool call MUST carry a valid capability.
+                // 3. Default-deny: every tool call MUST carry a valid capability (or host proxy grant).
                 for (const auto& tool : stmt.tool_calls) {
-                    auto cap_it = tool.args.find("cap");
-                    if (cap_it == tool.args.end()) {
-                        plan.error_message = "ERR:exec - missing capability for tool call: " + tool.name;
-                        return plan;
-                    }
-                    auto ttl_it = tool.args.find("ttl");
-                    if (!ttl_valid(ttl_it != tool.args.end() ? ttl_it->second : std::string(""))) {
-                        plan.error_message = "ERR:exec - capability ttl expired for tool call: " + tool.name;
-                        return plan;
-                    }
-                    std::string cap_token = cap_it->second;
-                    // Bind the capability to the tool's resource argument, not just its name.
                     std::string scope = "execute:" + tool.name;
                     std::string resource = tool_resource(tool.args);
                     if (!resource.empty()) scope += ":" + resource;
 
-                    if (!validate_capability(cap_token, scope, ast.header.agt)) {
-                        plan.error_message = "ERR:exec - Unauthorized tool call: " + tool.name;
+                    auto cap_it = tool.args.find("cap");
+                    if (cap_it != tool.args.end()) {
+                        // In-band JWT token present
+                        auto ttl_it = tool.args.find("ttl");
+                        if (!ttl_valid(ttl_it != tool.args.end() ? ttl_it->second : std::string(""))) {
+                            plan.error_message = "ERR:exec - capability ttl expired for tool call: " + tool.name;
+                            return plan;
+                        }
+                        std::string cap_token = cap_it->second;
+
+                        if (!validate_capability(cap_token, scope, ast.header.agt)) {
+                            plan.error_message = "ERR:exec - Unauthorized tool call: " + tool.name;
+                            return plan;
+                        }
+                        plan.approved_actions.push_back("TOOL authorized: " + tool.name);
+                    } else if (out_of_band_proxy_mode_) {
+                        // Out-of-band proxy mode: check host session capability grant
+                        if (!validate_proxy_capability(ast.header.agt, scope)) {
+                            plan.error_message = "ERR:exec - Unauthorized tool call: " + tool.name +
+                                                 " for agent " + ast.header.agt + " in proxy session";
+                            return plan;
+                        }
+                        plan.approved_actions.push_back("TOOL authorized (out-of-band proxy): " + tool.name);
+                    } else {
+                        plan.error_message = "ERR:exec - missing capability for tool call: " + tool.name;
                         return plan;
                     }
-                    plan.approved_actions.push_back("TOOL authorized: " + tool.name);
                 }
             }
         }
@@ -393,6 +547,21 @@ public:
 private:
     std::shared_ptr<SimpleJWTValidator> jwt_validator_;
     bool allow_delegation_;
+    bool out_of_band_proxy_mode_ = false;
+    bool enforce_idempotency_ = false;
+    IdempotencyStore idempotency_store_;
+    std::unordered_map<std::string, std::vector<std::string>> session_granted_scopes_;
+
+    bool validate_proxy_capability(const std::string& agent_id, const std::string& requested_scope) {
+        auto it = session_granted_scopes_.find(agent_id);
+        if (it == session_granted_scopes_.end()) return false;
+        for (const std::string& granted : it->second) {
+            if (granted == requested_scope || SimpleJWTValidator::scope_matches(granted, requested_scope)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     // Pointer fields reference a protected resource and therefore require a capability.
     // Kept as an explicit allow-list so it is easy to extend (matches schema is_pointer).
