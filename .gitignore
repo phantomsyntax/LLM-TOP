@@ -38,4 +38,5 @@ LLM_Mock/
 # Python
 __pycache__/
 test_nv_api.py
+run_live_eval_fast.py
 
