@@ -1,5 +1,5 @@
-VER:LLM-TOPv1 CHK:sha256:7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069 AGT:ci-agent-3 UID:ci-agent TIM:2026-07-18T08:00:00Z REQID:rq-0001 FALLBACK:json HR:1
-[RSH] tgt:src/auth.ts#L1-200:cap=eyJhb...;ttl=2026-07-18T09:00:00Z act:refactor GL:fix_multi_session+add_rate_limit TD:add_tests
-!read[path=$P/src/auth.ts;cap=eyJhb...;ttl=2026-07-18T09:00:00Z]
-GARBAGETOKEN_THAT_FAILS_PARSER
+VER:LLM-TOPv1 CHK:sha256:f145af45e95465e3bc75bd4c0ad8eff2f42a4d50b540cb6c0fda44dc314e24db AGT:ci-agent-3 UID:ci-agent TIM:2026-07-18T08:00:00Z REQID:rq-0001 FALLBACK:json HR:1
+[CODER] tgt:src/auth.ts#L1-200 act:refactor GL:fix_multi_session TD:add_tests,validate_format
+!read[path=src/auth.ts]
+[EXEC] tgt:tests/auth.test.ts act:execute GL:verify_fix
 !run[target=tests/auth.test.ts;idempotent=true]>test

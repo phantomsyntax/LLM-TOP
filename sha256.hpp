@@ -26,16 +26,41 @@ public:
         state_[6] = 0x1f83d9ab; state_[7] = 0x5be0cd19;
         count_ = 0;
         buf_len_ = 0;
+        finalized_ = false;
     }
 
+    // Absorb input a block at a time rather than a byte at a time. Every frame
+    // is hashed for CHK, so this runs over the whole payload; the byte loop paid
+    // a bounds-check and a branch per byte to do what one memcpy does.
     void update(const uint8_t* data, size_t len) {
-        for (size_t i = 0; i < len; ++i) {
-            buf_[buf_len_++] = data[i];
+        size_t pos = 0;
+
+        // Top up a partially filled buffer first.
+        if (buf_len_ > 0) {
+            const size_t need = BLOCK_SIZE - buf_len_;
+            const size_t take = (len < need) ? len : need;
+            std::memcpy(buf_.data() + buf_len_, data, take);
+            buf_len_ += take;
+            pos += take;
             if (buf_len_ == BLOCK_SIZE) {
                 transform(buf_.data());
                 count_ += BLOCK_SIZE * 8;
                 buf_len_ = 0;
             }
+        }
+
+        // Full blocks transform straight from the caller's memory, with no copy.
+        while (pos + BLOCK_SIZE <= len) {
+            transform(data + pos);
+            count_ += BLOCK_SIZE * 8;
+            pos += BLOCK_SIZE;
+        }
+
+        // Whatever is left is a partial block held for the next call.
+        if (pos < len) {
+            const size_t rest = len - pos;
+            std::memcpy(buf_.data(), data + pos, rest);
+            buf_len_ = rest;
         }
     }
 
@@ -43,7 +68,12 @@ public:
         update(reinterpret_cast<const uint8_t*>(s.data()), s.size());
     }
 
+    // Produce the digest. Calling this more than once returns the same value
+    // rather than hashing the padding again: finalize() mutates the state, so
+    // an unguarded second call silently returned garbage.
     std::array<uint8_t, DIGEST_SIZE> finalize() {
+        if (finalized_) return digest_;
+
         uint64_t total_bits = count_ + buf_len_ * 8;
 
         // Padding
@@ -61,14 +91,14 @@ public:
         }
         transform(buf_.data());
 
-        std::array<uint8_t, DIGEST_SIZE> digest;
         for (int i = 0; i < 8; ++i) {
-            digest[i * 4 + 0] = static_cast<uint8_t>(state_[i] >> 24);
-            digest[i * 4 + 1] = static_cast<uint8_t>(state_[i] >> 16);
-            digest[i * 4 + 2] = static_cast<uint8_t>(state_[i] >> 8);
-            digest[i * 4 + 3] = static_cast<uint8_t>(state_[i]);
+            digest_[i * 4 + 0] = static_cast<uint8_t>(state_[i] >> 24);
+            digest_[i * 4 + 1] = static_cast<uint8_t>(state_[i] >> 16);
+            digest_[i * 4 + 2] = static_cast<uint8_t>(state_[i] >> 8);
+            digest_[i * 4 + 3] = static_cast<uint8_t>(state_[i]);
         }
-        return digest;
+        finalized_ = true;
+        return digest_;
     }
 
     // Convenience: hash a string directly
@@ -97,6 +127,8 @@ private:
     uint64_t count_;
     size_t buf_len_;
     std::array<uint8_t, BLOCK_SIZE> buf_;
+    std::array<uint8_t, DIGEST_SIZE> digest_{};
+    bool finalized_ = false;
 
     static constexpr uint32_t K[64] = {
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,

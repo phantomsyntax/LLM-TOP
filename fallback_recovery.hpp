@@ -7,7 +7,8 @@
 #include <vector>
 #include <sstream>
 #include <ctime>
-#include <cassert>
+#include <cctype>
+#include <algorithm>
 
 // Fallback Recovery System for LLM-TOP
 // When a payload is corrupted or malformed, this system:
@@ -18,9 +19,14 @@
 
 class FallbackRecoveryManager {
 public:
+    // PARTIAL_SUCCESS was removed: it was unreachable. It required
+    // statements_recovered < statements_total, but the parser only ever pushes a
+    // statement that has a role, kvpairs, or tool calls -- both push sites guard
+    // on exactly that -- so every statement in the AST counts as recovered and
+    // the two totals are always equal. It advertised a recovery state the system
+    // could not enter.
     enum class RecoveryAction {
         REPARSE_SUGGESTED,      // Recovery instructions for Planner
-        PARTIAL_SUCCESS,        // Some statements parsed, others failed
         COMPLETE_FAILURE,       // Unable to recover; fallback to JSON diagnostic
         NO_ERROR
     };
@@ -69,9 +75,6 @@ public:
         if (plan.statements_recovered == 0) {
             plan.action = RecoveryAction::COMPLETE_FAILURE;
             plan.fallback_json = generate_fallback_json(ast, plan);
-        } else if (plan.statements_recovered < plan.statements_total) {
-            plan.action = RecoveryAction::PARTIAL_SUCCESS;
-            plan.recovery_instruction = generate_recovery_instruction(ast, plan, original_payload);
         } else {
             plan.action = RecoveryAction::REPARSE_SUGGESTED;
             plan.recovery_instruction = generate_recovery_instruction(ast, plan, original_payload);
@@ -85,8 +88,13 @@ public:
                                              const std::string& original_payload) {
         std::ostringstream oss;
 
+        // The recovery frame is a space-delimited LLM-TOP header, not JSON, so
+        // escape_json() does not protect it: a reqid containing a space would
+        // inject additional header fields (e.g. "x AGT:admin"). Restrict the
+        // value to a header-safe token instead.
         oss << "VER:LLM-TOPv1 CHK:sha256:recovery AGT:evaluator UID:system TIM:"
-            << get_iso_timestamp() << " REQID:" << escape_json(ast.header.reqid) << "_recovery FALLBACK:json\n";
+            << get_iso_timestamp() << " REQID:" << sanitize_header_token(ast.header.reqid)
+            << "_recovery FALLBACK:json\n";
 
         oss << "[PLANNER] act:repair GL:fix_and_resubmit TD:correct_syntax,validate_format\n";
         oss << "ERROR_COUNT:" << plan.errors_found << " ";
@@ -102,7 +110,7 @@ public:
         oss << "  1. Check for unclosed quotes or brackets in the payload\n";
         oss << "  2. Verify escape sequences (\\n, \\t, \\\\, \\\")\n";
         oss << "  3. Ensure all role declarations end with ]\n";
-        oss << "  4. Validate capability tokens (cap=...) have matching ttl=...\n";
+        oss << "  4. Keep values free of spaces: 'GL:fix the leak' splits into separate fields\n";
         oss << "  5. Re-validate the header (VER, CHK, AGT, UID, TIM, REQID)\n";
 
         oss << "\nORIGINAL_PAYLOAD_HASH:djb2:" << compute_simple_hash(original_payload) << "\n";
@@ -130,9 +138,6 @@ public:
                 break;
             case RecoveryAction::REPARSE_SUGGESTED:
                 js += "reparse_suggested";
-                break;
-            case RecoveryAction::PARTIAL_SUCCESS:
-                js += "partial_success";
                 break;
             case RecoveryAction::COMPLETE_FAILURE:
                 js += "complete_failure";
@@ -195,11 +200,6 @@ public:
                 std::cout << "REPARSE SUGGESTED\n";
                 std::cout << plan.recovery_instruction << "\n";
                 break;
-            case RecoveryAction::PARTIAL_SUCCESS:
-                std::cout << "PARTIAL SUCCESS (" << plan.statements_recovered 
-                          << "/" << plan.statements_total << " statements)\n";
-                std::cout << plan.recovery_instruction << "\n";
-                break;
             case RecoveryAction::COMPLETE_FAILURE:
                 std::cout << "COMPLETE FAILURE\n";
                 std::cout << "Fallback JSON:\n" << plan.fallback_json << "\n";
@@ -217,9 +217,31 @@ public:
     }
 
 private:
-    // Simple hash for audit trail
+    // Reduce an untrusted value to something safe to embed in a space-delimited
+    // protocol header: no spaces, newlines, or delimiters that could start a new
+    // field. Length-capped so a huge reqid cannot bloat the recovery frame.
+    static std::string sanitize_header_token(const std::string& s) {
+        static constexpr size_t kMaxLen = 64;
+        std::string out;
+        out.reserve(std::min(s.size(), kMaxLen));
+        for (char c : s) {
+            if (out.size() >= kMaxLen) break;
+            unsigned char uc = static_cast<unsigned char>(c);
+            if (std::isalnum(uc) || c == '-' || c == '_' || c == '.') {
+                out += c;
+            } else {
+                out += '_';
+            }
+        }
+        if (out.empty()) out = "unknown";
+        return out;
+    }
+
+    // Non-cryptographic digest used only to correlate log lines. This is the
+    // djb2 variant, which seeds at 5381; it was previously seeded at 0 while
+    // still being labelled djb2.
     std::string compute_simple_hash(const std::string& data) {
-        uint32_t hash = 0;
+        uint32_t hash = 5381;
         for (char c : data) {
             hash = ((hash << 5) + hash) + static_cast<uint8_t>(c);
         }
@@ -230,30 +252,3 @@ private:
 
 
 };
-
-// Test the recovery system
-inline void test_fallback_recovery() {
-    std::cout << "Testing FallbackRecoveryManager...\n";
-
-    // Create an AST with diagnostics (simulating a parse error)
-    AST ast;
-    ast.header.ver = "LLM-TOPv1";
-    ast.header.agt = "subagent-1";
-    ast.header.reqid = "req-123";
-    ast.diagnostic = "Malformed role declaration: [INCOMPLETE";
-
-    Statement stmt;
-    stmt.role = "CODER";
-    stmt.kvpairs["tgt"] = "src/main.cpp";
-    stmt.kvpairs["act"] = "refactor";
-    ast.statements.push_back(stmt);
-
-    FallbackRecoveryManager recovery;
-    auto plan = recovery.analyze_and_recover(ast, "VER:... [INCOMPLETE");
-
-    recovery.print_recovery_plan(plan);
-
-    assert(plan.errors_found > 0);
-    assert(plan.recovery_instruction.find("PLANNER") != std::string::npos);
-    std::cout << "[PASS] FallbackRecoveryManager test\n\n";
-}

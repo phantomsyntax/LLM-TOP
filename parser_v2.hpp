@@ -3,17 +3,20 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <deque>
 #include <sstream>
 #include <stdexcept>
 #include <optional>
 #include <iomanip>
+#include <algorithm>
+#include <cctype>
 #include "json_utils.hpp"
 
 // Custom insertion-ordered map to maintain sequence order of protocol keys (tgt, act, etc.)
 class ordered_map {
 public:
     using value_type = std::pair<std::string, std::string>;
-    using container_type = std::vector<value_type>;
+    using container_type = std::deque<value_type>;   // see the note on data_ below
     using iterator = container_type::iterator;
     using const_iterator = container_type::const_iterator;
 
@@ -78,11 +81,15 @@ public:
         index_.clear(); 
     }
 
+    // O(n) in the number of entries: the backing sequence is compacted and every
+    // later index is fixed up. These maps hold a handful of keys per statement,
+    // so that is the right trade against the bookkeeping a tombstone scheme would
+    // need. Unlike append, erase DOES invalidate outstanding references.
     void erase(const std::string& key) {
         auto it = index_.find(key);
         if (it != index_.end()) {
             size_t idx = it->second;
-            data_.erase(data_.begin() + idx);
+            data_.erase(data_.begin() + static_cast<std::ptrdiff_t>(idx));
             index_.erase(it);
             for (auto& pair : index_) {
                 if (pair.second > idx) {
@@ -92,7 +99,10 @@ public:
         }
     }
 
-    void insert(const std::pair<std::string, std::string>& pair) {
+    // Named for what it does. It was called insert(), which in every standard
+    // associative container leaves an existing value alone -- this overwrites it,
+    // so the old name promised the opposite of the behavior.
+    void insert_or_assign(const std::pair<std::string, std::string>& pair) {
         auto it = index_.find(pair.first);
         if (it != index_.end()) {
             data_[it->second].second = pair.second;
@@ -103,6 +113,16 @@ public:
     }
 
 private:
+    // A deque, not a vector, so that appending never invalidates references to
+    // existing elements. operator[] hands out a std::string& into this sequence;
+    // with a vector, the sequence below was undefined behavior the moment the
+    // second insertion reallocated:
+    //
+    //     std::string& v = m["a"];
+    //     m["b"] = "x";           // vector may reallocate here
+    //     v = "y";                // ... leaving v dangling
+    //
+    // Nothing in this repository depends on the storage being contiguous.
     container_type data_;
     std::unordered_map<std::string, size_t> index_;
 };
@@ -136,8 +156,32 @@ struct AST {
     std::vector<Statement> healed_draft;
     std::string diagnostic;
     bool recovery_attempted = false;
-    std::string raw_body; // payload bytes after the header line, for CHK integrity verification
+    std::string raw_frame; // the entire payload, for CHK integrity verification
 };
+
+// Canonical form for CHK computation: the whole frame with the CHK header's own
+// value blanked out.
+//
+// CHK previously digested only the body (everything after the first newline),
+// which left the identity header -- AGT, UID, TIM, REQID -- outside the check.
+// An agent id could therefore be rewritten in flight and the checksum still
+// verified. Blanking only CHK's own value lets the digest cover the header
+// without the digest having to contain itself.
+//
+// Note this is an UNKEYED digest: it detects truncation and corruption, not a
+// deliberate attacker, who can simply recompute it. Authentication comes from
+// capabilities, not from CHK.
+inline std::string canonical_for_chk(const std::string& frame) {
+    const std::string marker = "CHK:sha256:";
+    size_t p = frame.find(marker);
+    if (p == std::string::npos) return frame;
+    size_t start = p + marker.size();
+    size_t end = frame.find_first_of(" \r\n", start);
+    if (end == std::string::npos) end = frame.size();
+    std::string out = frame;
+    out.erase(start, end - start);
+    return out;
+}
 
 // escapeJson removed — use escape_json() from json_utils.hpp
 
@@ -198,9 +242,8 @@ public:
             handleError(ast, "Payload size exceeds maximum allowed limit");
             return ast;
         }
-        // Capture the body (everything after the first line) so the CHK header can be verified.
-        size_t first_nl = payload.find('\n');
-        ast.raw_body = (first_nl == std::string::npos) ? std::string("") : payload.substr(first_nl + 1);
+        // Capture the whole frame so CHK can be verified over the header too.
+        ast.raw_frame = payload;
         std::istringstream stream(payload);
         std::string line;
 
@@ -209,7 +252,25 @@ public:
             return ast;
         }
 
-        ast.header = parseHeader(ast, line);
+        // A model that puts each header field on its own line has produced
+        // exactly the right information in the wrong shape. Fold leading bare
+        // KEY:VALUE lines into the header line rather than rejecting the frame.
+        // Observed from mistral-large-3, whose output was otherwise field-perfect.
+        // raw_frame is untouched, so CHK still covers the bytes as they arrived.
+        std::string header_line = line;
+        std::istream::pos_type mark = stream.tellg();
+        while (std::getline(stream, line)) {
+            const std::string probe = trim(line);
+            if (!probe.empty()) {
+                if (!is_header_continuation(probe)) break;
+                header_line += " " + probe;
+            }
+            mark = stream.tellg();
+        }
+        stream.clear();
+        stream.seekg(mark);
+
+        ast.header = parseHeader(ast, header_line);
         Statement current_stmt;
         bool has_role = false;
         bool current_stmt_healed = false;
@@ -227,6 +288,18 @@ public:
             line.erase(0, line.find_first_not_of(" \r\t"));
             line.erase(line.find_last_not_of(" \r\t") + 1);
             if (line.empty()) continue;
+
+            // A role line begins a new statement, so flush the previous one
+            // BEFORE any healing on this line is recorded. Doing it the other
+            // way round attributed this line's heal to the statement that came
+            // before it, quarantining the clean statement and letting the
+            // malformed one through as trusted.
+            if (line[0] == '[' &&
+                (has_role || !current_stmt.kvpairs.empty() || !current_stmt.tool_calls.empty())) {
+                push_current_stmt(current_stmt, current_stmt_healed);
+                current_stmt = Statement();
+                current_stmt_healed = false;
+            }
 
             // Self-healing: count unescaped quotes and append missing closing quote
             bool in_quotes = false;
@@ -251,11 +324,6 @@ public:
             }
 
             if (line[0] == '[') {
-                if (has_role || !current_stmt.kvpairs.empty() || !current_stmt.tool_calls.empty()) {
-                    push_current_stmt(current_stmt, current_stmt_healed);
-                    current_stmt = Statement();
-                    current_stmt_healed = false;
-                }
                 size_t end_bracket = line.find(']');
                 if (end_bracket == std::string::npos) {
                     if (mode_ == Mode::TOLERANT) {
@@ -296,6 +364,28 @@ public:
 private:
     Mode mode_;
     size_t max_size_;
+
+    static bool is_bare_identifier(const std::string& s) {
+        if (s.empty()) return false;
+        for (unsigned char c : s) {
+            if (!(std::isalnum(c) || c == '_')) return false;
+        }
+        return true;
+    }
+
+    // Only a lone, space-free KEY:VALUE token whose key is a known header field
+    // may be folded into the header. Requiring both conditions keeps a statement
+    // KV line like `tgt:src/a.cpp` -- also space-free and colon-bearing -- from
+    // being swallowed, and stops a role or tool line from ever qualifying.
+    static bool is_header_continuation(const std::string& s) {
+        if (s.empty() || s[0] == '[' || s[0] == '!') return false;
+        if (s.find(' ') != std::string::npos) return false;
+        const size_t colon = s.find(':');
+        if (colon == std::string::npos || colon == 0) return false;
+        const std::string key = s.substr(0, colon);
+        return key == "VER" || key == "CHK" || key == "AGT" || key == "UID" ||
+               key == "TIM" || key == "REQID" || key == "FALLBACK" || key == "HR";
+    }
 
     void handleError(AST& ast, const std::string& msg) {
         if (mode_ == Mode::STRICT) {
@@ -416,10 +506,27 @@ private:
     void parseKVPairs(AST& ast, const std::string& line, ordered_map& kvpairs, bool& current_stmt_healed) {
         std::vector<std::string> tokens = lex_split(line, ' ');
         for (const auto& token : tokens) {
-            size_t colon = token.find(':');
-            if (colon != std::string::npos) {
-                std::string key = token.substr(0, colon);
-                std::string val = token.substr(colon + 1);
+            // The grammar already binds keys to values with '=' inside tool
+            // brackets (!read[path=...]), so a model writing `tgt=x` on the
+            // statement line has generalized the more consistent of the two
+            // separators this format uses. Accept whichever comes first: a ':'
+            // inside a trailing cap= value must not outrank a leading '='.
+            const size_t colon = token.find(':');
+            size_t equals = token.find('=');
+            // '=' binds only when what precedes it is a bare identifier. Without
+            // that guard a tool call that has drifted onto the statement line
+            // (`!read[path=src/a.cpp]`) splits into the garbage pair
+            // `!read[path` = `src/a.cpp]`, and the statement then validates
+            // carrying no tool call whatsoever -- strictly worse than rejecting
+            // it, because the frame authorizes nothing while claiming to be well
+            // formed. Observed from mistral-large-3.
+            if (equals != std::string::npos && !is_bare_identifier(token.substr(0, equals))) {
+                equals = std::string::npos;
+            }
+            const size_t sep = std::min(colon, equals);
+            if (sep != std::string::npos) {
+                std::string key = token.substr(0, sep);
+                std::string val = token.substr(sep + 1);
                 val = unquote_and_unescape(val);
                 if (kvpairs.count(key) > 0) {
                     handleError(ast, "Duplicate key detected: " + key);
@@ -427,7 +534,7 @@ private:
                 }
                 kvpairs[key] = val;
             } else {
-                handleError(ast, "Malformed KV pair (missing colon): " + token);
+                handleError(ast, "Malformed KV pair (missing ':' or '='): " + token);
             }
         }
     }

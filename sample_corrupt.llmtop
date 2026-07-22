@@ -1,0 +1,4 @@
+VER:LLM-TOPv1 CHK:sha256:PLACEHOLDER AGT:ci-agent-3 UID:ci-agent TIM:2026-07-18T08:00:00Z REQID:rq-0002 FALLBACK:json
+[CODER] tgt:src/auth.ts act:refactor GL:fix_multi_session
+GARBAGETOKEN_THAT_FAILS_PARSER
+!read[path=src/auth.ts

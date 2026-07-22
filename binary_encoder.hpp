@@ -54,8 +54,13 @@ public:
         OP_KV = 0x23,
 
         // Special
+        //
+        // OP_END_MESSAGE (0x7F) was removed. Nothing ever emitted it -- only
+        // OP_END_STATEMENT is written -- yet the decoder handled it, which
+        // implied a message-level framing layer that does not exist. 0x7F stays
+        // unassigned rather than being reused, so any bytes produced by an older
+        // encoder still decode identically.
         OP_END_STATEMENT = 0x7E,
-        OP_END_MESSAGE = 0x7F,
     };
 
     // Encode a header to binary
@@ -188,10 +193,6 @@ public:
             Opcode op = static_cast<Opcode>(op_byte);
 
             if (op == Opcode::OP_END_STATEMENT) {
-                pos++; // Consume end marker
-                break;
-            }
-            if (op == Opcode::OP_END_MESSAGE) {
                 pos++; // Consume end marker
                 break;
             }
