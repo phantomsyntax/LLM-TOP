@@ -30,6 +30,12 @@ param(
         "nvidia/llama-3.3-nemotron-super-49b-v1.5"
     ),
     [int]$Trials = 3,
+    # Append an explicit "no spaces inside values" rule to the LLM-TOP system
+    # prompt. Off by default so the baseline condition -- a model shown only the
+    # structure -- stays reproducible. JSON needs no equivalent rule, and that
+    # asymmetry is the finding, so the extra prompt tokens are charged to LLM-TOP
+    # in the ledger below.
+    [switch]$AntiSpaceRule,
     [string]$Url = "https://integrate.api.nvidia.com/v1/chat/completions",
     [int]$TimeoutSec = 90,
     [string]$OutCsv = "$PSScriptRoot\compliance_results.csv",
@@ -60,6 +66,13 @@ VER:LLM-TOPv1 CHK:sha256:0000 AGT:planner UID:user1 TIM:2026-07-22 REQID:<reqid>
 [CODER] tgt:<path> act:<action> GL:<goal>
 !<tool>[path=<path>]
 '@
+
+if ($AntiSpaceRule) {
+    $sys_llmtop += @'
+CRITICAL: never put a space inside a value. Fields are separated by spaces, so GL:fix the memory leak
+is parsed as three separate fields and the payload is rejected. Use underscore slugs: GL:fix_memory_leak.
+'@
+}
 
 $sys_json = @'
 You are a command planner. Respond ONLY with a minified JSON object. No prose, no explanation, no code fences.
@@ -180,10 +193,15 @@ function Get-WilsonInterval {
     $denom  = 1 + ($z*$z)/$n
     $center = ($p + ($z*$z)/(2*$n)) / $denom
     $half   = ($z / $denom) * [math]::Sqrt(($p*(1-$p))/$n + ($z*$z)/(4*$n*$n))
+    # 0.0 / 1.0, not 0 / 1. With integer literals PowerShell binds the
+    # [math]::Max(int,int) overload, truncating the double bound to an int: a
+    # true interval of [0, 0.161] came out as [0, 0] and [0.839, 1.0] came out
+    # as [1, 1]. Every interval silently collapsed to a point estimate, which is
+    # the exact false precision the interval exists to prevent.
     return @{
         Point = [math]::Round($p*100,1)
-        Low   = [math]::Round([math]::Max(0,($center-$half))*100,1)
-        High  = [math]::Round([math]::Min(1,($center+$half))*100,1)
+        Low   = [math]::Round([math]::Max(0.0,($center-$half))*100,1)
+        High  = [math]::Round([math]::Min(1.0,($center+$half))*100,1)
     }
 }
 

@@ -66,7 +66,7 @@ Both configurations must be green at the end of every task.
 
 **Two corrections to the spec.** The spec's T7 says to commit the integration fixtures by dropping `LLM_Mock/` from `.gitignore`. Both halves of that are wrong:
 
-1. `LLM_Mock/` lives at `C:\Development\LLM\LLM_Mock`, *outside* the git root at `C:\Development\LLM\LLMTOP`. Git cannot track a path above the repository root, so the `.gitignore` entry never matched anything and removing it changes nothing.
+1. `LLM_Mock/` lives in the repository's parent directory, *outside* the git root. Git cannot track a path above the repository root, so the `.gitignore` entry never matched anything and removing it changes nothing.
 2. More importantly, **the fixtures are not needed at all.** They date from the early heuristic-testing stage. Exactly one line of code opens one of them (`test_integration.cpp:62`), and what it asserts — that `std::ifstream` works and that a file contains a string someone wrote into it — exercises no LLM-TOP code. `astar.cpp` is opened by nothing; its own header comment says so. Every other `LLM_Mock` reference across the repo is a path inside a payload *string literal*, never resolved against the filesystem.
 
 So Task 4 deletes the dependency rather than relocating it. This also resolves the fixture findings recorded in `REVIEW.md:26` and `LLM-TOP_analysis.md:63`, which Phase 4 should mark closed.

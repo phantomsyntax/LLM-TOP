@@ -191,7 +191,7 @@ Every claim must trace to a binary in this repo or be deleted.
 
 | ID | Fix |
 |---|---|
-| D-1 | `README.md:92` — replace `file:///C:/Development/LLM/LLMTOP/LICENSE` with a relative link |
+| D-1 | `README.md:92` — replace `file:///<absolute-local-path>/LICENSE` with a relative link |
 | D-2 | Resolve C++17 vs C++20 by **moving to C++20** and updating `CMakeLists.txt`, making the docs true rather than the reverse. This is load-bearing, not cosmetic: P1's `string_view` probing of `ranks_` needs C++20 heterogeneous lookup for `unordered_map`. Landing it in Phase 0 unblocks Phase 3 |
 | D-3 | `README.md:54` — `fuzzer.exe 2000` takes an argument `main()` does not accept |
 | D-4 | Grammar.md → v1.1; `<string_no_reserved>` excludes `:` though every value uses it; `HR ::= 0\|1` vs `std::stoi`; `@mem/NNN` **removed** (per Non-goals); Ed25519 struck |
