@@ -13,6 +13,7 @@
 #include <deque>
 #include <string_view>
 #include <sstream>
+#include <mutex>
 
 // Real JWT validator for capability tokens using HMAC-SHA256.
 // Implements proper base64url encoding/decoding, signature verification,
@@ -284,16 +285,21 @@ public:
         return result;
     }
 
-    // Check if scope pattern matches requested resource (split on :, * matches one segment)
+    // Check if scope pattern matches requested resource (split on :, * matches single segment, ** matches multi-depth)
     static bool scope_matches(const std::string& granted, const std::string& requested) {
+        if (granted == "**") return true;
         auto g_segs = split_scope_sv(granted, ':');
         auto r_segs = split_scope_sv(requested, ':');
-        if (g_segs.size() != r_segs.size()) return false;
+        
         for (size_t i = 0; i < g_segs.size(); ++i) {
+            if (g_segs[i] == "**") return true; // Multi-depth glob match
+            if (i >= r_segs.size()) return false;
             if (g_segs[i] == "*") continue;
             
             std::string g_norm = normalize_path_segment(std::string(g_segs[i]));
             std::string r_norm = normalize_path_segment(std::string(r_segs[i]));
+
+            if (g_norm == "**") return true;
 
             if (g_norm.find('*') != std::string::npos) {
                 std::string pattern = g_norm.substr(0, g_norm.find('*'));
@@ -304,7 +310,7 @@ public:
                 return false;
             }
         }
-        return true;
+        return g_segs.size() == r_segs.size();
     }
 
 private:
@@ -359,6 +365,7 @@ public:
 
     // Record a request ID for an agent. Returns true if unique (not replayed), false if duplicate/replayed.
     bool record_request(const std::string& agent_id, const std::string& reqid, const std::string& checksum) {
+        std::lock_guard<std::mutex> lock(mutex_);
         std::string key = agent_id + ":" + reqid;
         if (seen_requests_.find(key) != seen_requests_.end()) {
             return false; // Replay detected!
@@ -374,11 +381,13 @@ public:
     }
 
     bool is_replayed(const std::string& agent_id, const std::string& reqid) const {
+        std::lock_guard<std::mutex> lock(mutex_);
         std::string key = agent_id + ":" + reqid;
         return seen_requests_.find(key) != seen_requests_.end();
     }
 
     void clear() {
+        std::lock_guard<std::mutex> lock(mutex_);
         seen_requests_.clear();
         history_.clear();
     }
@@ -387,6 +396,7 @@ private:
     size_t max_entries_;
     std::unordered_map<std::string, std::string> seen_requests_;
     std::deque<std::string> history_;
+    mutable std::mutex mutex_;
 };
 
 
@@ -413,10 +423,12 @@ public:
     }
 
     void grant_session_capability(const std::string& agent_id, const std::string& scope) {
+        std::lock_guard<std::mutex> lock(session_mutex_);
         session_granted_scopes_[agent_id].push_back(scope);
     }
 
     void revoke_session_capabilities(const std::string& agent_id) {
+        std::lock_guard<std::mutex> lock(session_mutex_);
         session_granted_scopes_.erase(agent_id);
     }
 
@@ -551,8 +563,10 @@ private:
     bool enforce_idempotency_ = false;
     IdempotencyStore idempotency_store_;
     std::unordered_map<std::string, std::vector<std::string>> session_granted_scopes_;
+    mutable std::mutex session_mutex_;
 
     bool validate_proxy_capability(const std::string& agent_id, const std::string& requested_scope) {
+        std::lock_guard<std::mutex> lock(session_mutex_);
         auto it = session_granted_scopes_.find(agent_id);
         if (it == session_granted_scopes_.end()) return false;
         for (const std::string& granted : it->second) {
