@@ -547,6 +547,184 @@ int main() {
     std::cout << "  vs Compact JSON: " << get_median_and_range(top_vs_compact_savings) << "\n";
     std::cout << "  vs Minimal JSON: " << get_median_and_range(top_vs_minimal_savings) << "\n";
     std::cout << "  vs YAML:         " << get_median_and_range(top_vs_yaml_savings) << "\n";
+    std::cout << "\nAll four baselines above are the same information as the LLM-TOP frame,\n"
+                 "re-encoded. They therefore measure LLM-TOP's own AST shape, not a format\n"
+                 "any API actually speaks. Table 2 is the comparison against a real one.\n";
+    std::cout << std::string(85, '=') << "\n\n";
+
+    // ---------------------------------------------------------------------
+    // Table 2: the shape a tool-calling API actually sends.
+    //
+    // The baselines above re-encode LLM-TOP's own frame. A reader deciding
+    // whether to adopt this protocol is not choosing between LLM-TOP and a
+    // hypothetical JSON transcription of it -- they are choosing between
+    // LLM-TOP and the OpenAI-style tool_calls envelope their model already
+    // emits, whose arguments are a JSON string nested inside JSON.
+    // ---------------------------------------------------------------------
+    struct ToolCallCase {
+        std::string name;
+        std::string top;
+        std::string openai_json;
+    };
+
+    const std::vector<ToolCallCase> tool_calls = {
+        {
+            "Single tool call",
+            "!read[path=src/auth.ts]",
+            "{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call_a1b2c3d4\",\"type\":\"function\","
+            "\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\\\"src/auth.ts\\\"}\"}}]}"
+        },
+        {
+            "Two args",
+            "!run[target=build/run.sh;timeout=120]",
+            "{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call_e5f6a7b8\",\"type\":\"function\","
+            "\"function\":{\"name\":\"run\",\"arguments\":\"{\\\"target\\\":\\\"build/run.sh\\\","
+            "\\\"timeout\\\":120}\"}}]}"
+        },
+        {
+            "Three calls in a turn",
+            "!read[path=src/a.ts]\n!read[path=src/b.ts]\n!write[path=src/c.ts;mode=append]",
+            "{\"role\":\"assistant\",\"tool_calls\":["
+            "{\"id\":\"call_11111111\",\"type\":\"function\",\"function\":{\"name\":\"read\","
+            "\"arguments\":\"{\\\"path\\\":\\\"src/a.ts\\\"}\"}},"
+            "{\"id\":\"call_22222222\",\"type\":\"function\",\"function\":{\"name\":\"read\","
+            "\"arguments\":\"{\\\"path\\\":\\\"src/b.ts\\\"}\"}},"
+            "{\"id\":\"call_33333333\",\"type\":\"function\",\"function\":{\"name\":\"write\","
+            "\"arguments\":\"{\\\"path\\\":\\\"src/c.ts\\\",\\\"mode\\\":\\\"append\\\"}\"}}]}"
+        },
+    };
+
+    std::cout << "TABLE 2: OUTPUT TOOL-CALL TURNS vs THE OPENAI tool_calls ENVELOPE\n";
+    std::cout << std::string(85, '=') << "\n";
+    std::cout << std::left << std::setw(28) << "Case"
+              << std::setw(12) << "LLM-TOP"
+              << std::setw(16) << "OpenAI JSON"
+              << "Reduction\n";
+    std::cout << std::string(85, '-') << "\n";
+
+    std::vector<float> tool_call_savings;
+    for (const auto& c : tool_calls) {
+        int t_top = estimateTokens(c.top);
+        int t_api = estimateTokens(c.openai_json);
+        float s = 100.0f * (1.0f - (float)t_top / t_api);
+        tool_call_savings.push_back(s);
+
+        std::stringstream pct;
+        pct << std::fixed << std::setprecision(1) << s << "%";
+        std::cout << std::left << std::setw(28) << c.name
+                  << std::setw(12) << t_top
+                  << std::setw(16) << t_api
+                  << pct.str() << "\n";
+    }
+    std::cout << std::string(85, '-') << "\n";
+    std::cout << "  Tool-call turn savings: " << get_median_and_range(tool_call_savings) << "\n";
+    std::cout << std::string(85, '=') << "\n\n";
+
+    // ---------------------------------------------------------------------
+    // Table 3: auth mode, holding the serialization format constant.
+    //
+    // The headline "-75% on tool calls" figure came from comparing an LLM-TOP
+    // frame with no capability token against a JSON frame carrying a full JWT.
+    // That changes two variables at once and credits the format with a saving
+    // that belongs to the auth mode. Below, each variable moves on its own.
+    // ---------------------------------------------------------------------
+    const std::string kJwt =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1"
+        "dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789";
+
+    struct AuthModeCase {
+        std::string name;
+        std::string top_inband;
+        std::string top_oob;
+        std::string json_inband;
+        std::string json_oob;
+    };
+
+    const std::vector<AuthModeCase> auth_modes = {
+        {
+            "Authenticated read",
+            "VER:LLM-TOPv1 CHK:sha256:1111 AGT:reader UID:anon TIM:2026-07-18 REQID:req1 FALLBACK:json\n"
+            "[READER] tgt:src/auth_spec.txt:cap=" + kJwt + " act:analyze GL:summarize_requirements\n"
+            "!read[path=src/auth_spec.txt;cap=" + kJwt + "]\n",
+
+            "VER:LLM-TOPv1 CHK:sha256:1111 AGT:reader UID:anon TIM:2026-07-18 REQID:req1 FALLBACK:json\n"
+            "[READER] tgt:src/auth_spec.txt act:analyze GL:summarize_requirements\n"
+            "!read[path=src/auth_spec.txt]\n",
+
+            "{\"v\":\"LLM-TOPv1\",\"c\":\"sha256:1111\",\"a\":\"reader\",\"u\":\"anon\",\"t\":\"2026-07-18\","
+            "\"r\":\"req1\",\"f\":\"json\",\"s\":[{\"o\":\"READER\",\"k\":{\"t\":\"src/auth_spec.txt\","
+            "\"cap\":\"" + kJwt + "\",\"a\":\"analyze\",\"G\":\"summarize_requirements\"},"
+            "\"c\":[{\"t\":\"read\",\"a\":{\"p\":\"src/auth_spec.txt\",\"c\":\"" + kJwt + "\"}}]}]}",
+
+            "{\"v\":\"LLM-TOPv1\",\"c\":\"sha256:1111\",\"a\":\"reader\",\"u\":\"anon\",\"t\":\"2026-07-18\","
+            "\"r\":\"req1\",\"f\":\"json\",\"s\":[{\"o\":\"READER\",\"k\":{\"t\":\"src/auth_spec.txt\","
+            "\"a\":\"analyze\",\"G\":\"summarize_requirements\"},"
+            "\"c\":[{\"t\":\"read\",\"a\":{\"p\":\"src/auth_spec.txt\"}}]}]}"
+        },
+        {
+            "Authenticated execute",
+            "VER:LLM-TOPv1 CHK:sha256:2222 AGT:coder UID:anon TIM:2026-07-18 REQID:req2 FALLBACK:json\n"
+            "[EXEC] tgt:src/astar.cpp:cap=" + kJwt + " act:execute GL:run_astar\n"
+            "!run[target=src/astar.cpp;cap=" + kJwt + "]\n",
+
+            "VER:LLM-TOPv1 CHK:sha256:2222 AGT:coder UID:anon TIM:2026-07-18 REQID:req2 FALLBACK:json\n"
+            "[EXEC] tgt:src/astar.cpp act:execute GL:run_astar\n"
+            "!run[target=src/astar.cpp]\n",
+
+            "{\"v\":\"LLM-TOPv1\",\"c\":\"sha256:2222\",\"a\":\"coder\",\"u\":\"anon\",\"t\":\"2026-07-18\","
+            "\"r\":\"req2\",\"f\":\"json\",\"s\":[{\"o\":\"EXEC\",\"k\":{\"t\":\"src/astar.cpp\","
+            "\"cap\":\"" + kJwt + "\",\"a\":\"execute\",\"G\":\"run_astar\"},"
+            "\"c\":[{\"t\":\"run\",\"a\":{\"t\":\"src/astar.cpp\",\"c\":\"" + kJwt + "\"}}]}]}",
+
+            "{\"v\":\"LLM-TOPv1\",\"c\":\"sha256:2222\",\"a\":\"coder\",\"u\":\"anon\",\"t\":\"2026-07-18\","
+            "\"r\":\"req2\",\"f\":\"json\",\"s\":[{\"o\":\"EXEC\",\"k\":{\"t\":\"src/astar.cpp\","
+            "\"a\":\"execute\",\"G\":\"run_astar\"},"
+            "\"c\":[{\"t\":\"run\",\"a\":{\"t\":\"src/astar.cpp\"}}]}]}"
+        },
+    };
+
+    std::cout << "TABLE 3: AUTH MODE vs FORMAT, MEASURED SEPARATELY\n";
+    std::cout << std::string(85, '=') << "\n";
+    std::cout << std::left << std::setw(24) << "Scenario"
+              << std::setw(11) << "TOP+JWT"
+              << std::setw(11) << "TOP OOB"
+              << std::setw(12) << "JSON+JWT"
+              << std::setw(11) << "JSON OOB"
+              << "\n";
+    std::cout << std::string(85, '-') << "\n";
+
+    std::vector<float> oob_effect_top;      // auth mode alone, format held at LLM-TOP
+    std::vector<float> format_effect_oob;   // format alone, auth mode held out-of-band
+    std::vector<float> conflated;           // the old apples-to-oranges comparison
+
+    for (const auto& c : auth_modes) {
+        int ti = estimateTokens(c.top_inband);
+        int to = estimateTokens(c.top_oob);
+        int ji = estimateTokens(c.json_inband);
+        int jo = estimateTokens(c.json_oob);
+
+        oob_effect_top.push_back(100.0f * (1.0f - (float)to / ti));
+        format_effect_oob.push_back(100.0f * (1.0f - (float)to / jo));
+        conflated.push_back(100.0f * (1.0f - (float)to / ji));
+
+        std::cout << std::left << std::setw(24) << c.name
+                  << std::setw(11) << ti
+                  << std::setw(11) << to
+                  << std::setw(12) << ji
+                  << std::setw(11) << jo
+                  << "\n";
+    }
+
+    std::cout << std::string(85, '-') << "\n";
+    std::cout << "Effect of AUTH MODE only (LLM-TOP in-band -> out-of-band):\n";
+    std::cout << "  " << get_median_and_range(oob_effect_top) << "\n";
+    std::cout << "Effect of FORMAT only (minified JSON -> LLM-TOP, both out-of-band):\n";
+    std::cout << "  " << get_median_and_range(format_effect_oob) << "\n";
+    std::cout << "Both at once (LLM-TOP out-of-band vs minified JSON carrying a JWT):\n";
+    std::cout << "  " << get_median_and_range(conflated) << "\n";
+    std::cout << "\nThe third number is the one previously published as a property of the\n"
+                 "protocol. It is mostly the first: the saving comes from keeping the\n"
+                 "bearer token out of the token stream, which any format can do.\n";
     std::cout << std::string(85, '=') << "\n";
 
     return 0;

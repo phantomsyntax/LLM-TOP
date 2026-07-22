@@ -34,8 +34,3 @@ build*/
 # Local mock tests
 MockProject/
 
-# Python
-__pycache__/
-test_nv_api.py
-run_live_eval_fast.py
-

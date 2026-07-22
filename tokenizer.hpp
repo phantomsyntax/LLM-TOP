@@ -22,6 +22,11 @@
 // payloads. It is not a general Unicode tokenizer: \p{L}/\p{N}/\s are treated as
 // their ASCII subsets, which is exact for ASCII input and the reason the
 // known-vector tests in test_tokenizer.cpp pass.
+//
+// Because the ASCII specialization would silently produce a *wrong* count on
+// non-ASCII input rather than an obviously broken one, encode() rejects any byte
+// >= 0x80 outright. A published measurement that is quietly off by a few tokens
+// is worse than one that failed to run.
 class Cl100kTokenizer {
 public:
     explicit Cl100kTokenizer(const std::string& ranks_path) {
@@ -42,9 +47,16 @@ public:
         if (ranks_.empty()) {
             throw std::runtime_error("Cl100kTokenizer: ranks file was empty: " + ranks_path);
         }
+        // Pointers into unordered_map keys stay valid across rehash, and nothing
+        // ever erases from ranks_, so the inverse map can borrow rather than copy.
+        inverse_.reserve(ranks_.size());
+        for (const auto& kv : ranks_) {
+            inverse_[kv.second] = &kv.first;
+        }
     }
 
     std::vector<int> encode(const std::string& text) const {
+        require_ascii(text);
         std::vector<int> out;
         size_t i = 0, n = text.size();
         while (i < n) {
@@ -57,8 +69,53 @@ public:
 
     size_t count(const std::string& text) const { return encode(text).size(); }
 
+    // Inverse of encode(). Concatenating the byte sequences behind `ids` must
+    // reproduce the original text exactly; the tests use that round trip to catch
+    // a pre-tokenizer that drops or duplicates input.
+    std::string decode(const std::vector<int>& ids) const {
+        std::string out;
+        for (int id : ids) {
+            auto it = inverse_.find(id);
+            if (it == inverse_.end()) {
+                throw std::runtime_error("Cl100kTokenizer: unknown token id in decode");
+            }
+            out += *it->second;
+        }
+        return out;
+    }
+
+    // The pre-token split that encode() merges within. Exposed because this is
+    // the hand-written half of the cl100k_base pattern, and therefore where
+    // protocol punctuation (`:` `;` `=` `[` `]` runs) is most likely mis-split.
+    std::vector<std::string> pretokens(const std::string& text) const {
+        require_ascii(text);
+        std::vector<std::string> out;
+        size_t i = 0, n = text.size();
+        while (i < n) {
+            size_t len = next_pretoken(text, i);
+            out.push_back(text.substr(i, len));
+            i += len;
+        }
+        return out;
+    }
+
+    // The loaded vocabulary (token bytes -> id). Exposed so the tests can run an
+    // independent reference merge against the same ranks.
+    const std::unordered_map<std::string, int>& ranks() const { return ranks_; }
+
 private:
     std::unordered_map<std::string, int> ranks_;
+    std::unordered_map<int, const std::string*> inverse_;
+
+    static void require_ascii(const std::string& text) {
+        for (size_t i = 0; i < text.size(); ++i) {
+            if (static_cast<unsigned char>(text[i]) >= 0x80) {
+                throw std::runtime_error(
+                    "Cl100kTokenizer: non-ASCII byte at offset " + std::to_string(i) +
+                    "; this tokenizer is ASCII-only and would mis-count the input");
+            }
+        }
+    }
 
     // --- character classes (ASCII-specialized) ---
     static bool is_letter(unsigned char c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); }
@@ -136,11 +193,6 @@ private:
         return 1; // safety: never return 0
     }
 
-    // Byte-pair merge one pre-token, appending resulting token ids to `out`.
-    // tiktoken's algorithm: start from single bytes, repeatedly merge the adjacent
-    // pair with the lowest rank until no adjacent pair is mergeable.
-#include <queue>
-
     struct MergePair {
         int rank;
         size_t index;
@@ -151,7 +203,9 @@ private:
     };
 
     // Byte-pair merge one pre-token, appending resulting token ids to `out`.
-    // Fast O(n log n) priority queue implementation matching tiktoken's min-rank pair selection.
+    // tiktoken's algorithm: start from single bytes, repeatedly merge the adjacent
+    // pair with the lowest rank until no adjacent pair is mergeable. Implemented
+    // as an O(n log n) priority queue over candidate pairs rather than a rescan.
     void bpe(const std::string& piece, std::vector<int>& out) const {
         if (piece.empty()) return;
         if (piece.size() == 1) {
