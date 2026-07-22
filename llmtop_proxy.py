@@ -62,23 +62,30 @@ class LLMTOPHostProxy:
 
     def match_scope(self, granted: str, requested: str) -> bool:
         """Evaluate if a granted scope pattern authorizes a requested scope."""
+        if granted == '**':
+            return True
         g_parts = granted.split(':')
         r_parts = requested.split(':')
-        if len(g_parts) != len(r_parts):
-            return False
         
-        for g_seg, r_seg in zip(g_parts, r_parts):
+        for i, g_seg in enumerate(g_parts):
+            if g_seg == '**':
+                return True
+            if i >= len(r_parts):
+                return False
             if g_seg == '*':
                 continue
+            
             g_norm = self.normalize_path(g_seg)
-            r_norm = self.normalize_path(r_seg)
+            r_norm = self.normalize_path(r_parts[i])
+            if g_norm == '**':
+                return True
             if '*' in g_norm:
                 pattern = g_norm.split('*')[0]
                 if not r_norm.startswith(pattern):
                     return False
             elif g_norm != r_norm:
                 return False
-        return True
+        return len(g_parts) == len(r_parts)
 
     def is_authorized(self, agent_id: str, requested_scope: str) -> bool:
         """Check if an agent holds an active out-of-band session capability for a scope."""
