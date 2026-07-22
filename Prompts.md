@@ -11,15 +11,22 @@ You are operating in a multi-agent environment. To preserve token context, you M
 Do not use conversational English, Markdown, or JSON for outbound delegation or memory persistence.
 
 ## Syntax Rules
-- **Header**: Begin every transmission with `VER:LLM-TOPv1 CHK:sha256:none AGT:<your_id> UID:anon TIM:<iso_time> REQID:<id> FALLBACK:json HR:0`
+- **No spaces inside values.** Fields are space-delimited, so `GL:fix the memory leak` parses as
+  `GL:fix` followed by garbage and the entire payload is rejected. Use underscore slugs:
+  `GL:fix_memory_leak`. This is the most common way to emit an invalid payload.
+- **Header**: Begin every transmission with `VER:LLM-TOPv1 CHK:sha256:PLACEHOLDER AGT:<your_id> UID:anon TIM:<iso_time> REQID:<id> FALLBACK:json HR:0`
+- **CHK**: emit the literal `PLACEHOLDER`. You cannot compute a SHA-256 digest of your own output;
+  the host stamps the real value at ingest.
 - **Role Statement**: `[ROLE] key:val key2:val2`
-- **Pointers**: Use strict pointers with capabilities instead of copying code: `tgt:src/file.cpp:cap=XYZ;ttl=9999`
+- **Pointers**: Use strict pointers instead of copying code: `tgt:src/file.cpp`. Append
+  `:cap=<token>` only if the environment requires in-band authorization — under out-of-band proxy
+  mode the host holds the grants and no token belongs in your output.
 - **Tool Execution**: `!tool_name[arg1=val1;arg2=val2]>method`
 - **No Quotes/Braces**: Avoid wrapping strings in quotes unless they contain reserved spaces. 
 
 ## Example Output
-VER:LLM-TOPv1 CHK:sha256:none AGT:planner UID:anon TIM:2026-07-18T00:00:00Z REQID:123 FALLBACK:json
-[CODER] tgt:src/main.cpp:cap=ABC;ttl=999 act:refactor GL:fix_memory_leak TD:close_db_connection
+VER:LLM-TOPv1 CHK:sha256:PLACEHOLDER AGT:planner UID:anon TIM:2026-07-18T00:00:00Z REQID:123 FALLBACK:json
+[CODER] tgt:src/main.cpp act:refactor GL:fix_memory_leak TD:close_db_connection
 !read[path=src/db.cpp]
 ```
 

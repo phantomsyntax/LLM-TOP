@@ -22,6 +22,7 @@
 #include "parser_v2.hpp"
 #include "schema_validator.hpp"
 #include "json_utils.hpp"
+#include "chk.hpp"
 
 #ifndef CL100K_RANKS_PATH
 #define CL100K_RANKS_PATH "data/cl100k_base.tiktoken"
@@ -35,6 +36,10 @@ static void print_usage() {
         "and prints one line of JSON describing it.\n"
         "\n"
         "Options:\n"
+        "  --stamp           Write the payload back out with its CHK header set to\n"
+        "                    the correct digest, and exit. This is the supported way\n"
+        "                    for a host to make an LLM-generated frame satisfy the\n"
+        "                    middleware's integrity check. No JSON is printed.\n"
         "  --validate        Parse and schema-check the payload as LLM-TOP.\n"
         "                    Without this, only size and token count are reported.\n"
         "  --tolerant        With --validate, parse in TOLERANT mode (collect\n"
@@ -66,12 +71,15 @@ int main(int argc, char* argv[]) {
     std::string ranks_path = CL100K_RANKS_PATH;
     bool validate = false;
     bool tolerant = false;
+    bool stamp = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--help" || arg == "-h") {
             print_usage();
             return 0;
+        } else if (arg == "--stamp") {
+            stamp = true;
         } else if (arg == "--validate") {
             validate = true;
         } else if (arg == "--tolerant") {
@@ -99,6 +107,14 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         payload = read_all(in);
+    }
+
+    // Stamping is a producer action, not a measurement: emit the frame and stop.
+    // Deliberately does not load the tokenizer, so a host can stamp frames
+    // without the ranks file present.
+    if (stamp) {
+        std::cout << stamp_chk(payload);
+        return 0;
     }
 
     size_t tokens = 0;

@@ -6,7 +6,7 @@ LLM‑TOP is a compact, ASCII‑based protocol for LLM↔LLM and LLM↔tool comm
 ## Core Primitives
 - Markers: `+ - > ? ! @ OK ERR`
 - Shorthand: `tgt, ctx, err, req, dep, fn, cls, var, GL, TD, act`
-- Pointers: `tgt:src/auth.ts#L45-50`, `@mem/004`
+- Pointers: `tgt:src/auth.ts#L45-50` (optionally `:cap=<token>` for in-band authorization)
 - Tool prefix: `!` for tool execution; `[]` for tool args; `>` for methods/actions
 
 ## Mandatory Header (First Line)

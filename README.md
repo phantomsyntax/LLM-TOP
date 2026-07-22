@@ -68,6 +68,14 @@ Header-only C++20. No runtime dependencies.
 
 - `llmtop_eval.cpp`: Measures a payload — real BPE token count plus parse/schema validation —
   and emits one line of JSON. Every published figure traces back to this or `benchmarker_real`.
+  `--stamp` writes the frame back out with a correct `CHK`, which is how a host makes
+  LLM-generated output satisfy the integrity check.
+- `run_compliance_eval.ps1`: Measures how often a model emits a *valid* payload, against a
+  free-text JSON control held to equivalent strictness. Reports Wilson intervals, and excludes
+  transport failures and truncated generations from the denominator rather than scoring them as
+  format failures.
+- `sample.llmtop` / `sample_corrupt.llmtop`: a valid frame (stamped, passes schema validation) and
+  a deliberately damaged one for demonstrating tolerant-mode recovery.
 - `benchmarker_real.cpp`: Token measurements across multi-agent scenarios.
 - `fuzzer.cpp`: Randomized mutation fuzzing across the parser, middleware, JWT/base64 decode, and
   binary decoder, asserting output invariants rather than mere absence of exceptions.

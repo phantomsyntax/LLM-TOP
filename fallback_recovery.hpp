@@ -19,9 +19,14 @@
 
 class FallbackRecoveryManager {
 public:
+    // PARTIAL_SUCCESS was removed: it was unreachable. It required
+    // statements_recovered < statements_total, but the parser only ever pushes a
+    // statement that has a role, kvpairs, or tool calls -- both push sites guard
+    // on exactly that -- so every statement in the AST counts as recovered and
+    // the two totals are always equal. It advertised a recovery state the system
+    // could not enter.
     enum class RecoveryAction {
         REPARSE_SUGGESTED,      // Recovery instructions for Planner
-        PARTIAL_SUCCESS,        // Some statements parsed, others failed
         COMPLETE_FAILURE,       // Unable to recover; fallback to JSON diagnostic
         NO_ERROR
     };
@@ -70,9 +75,6 @@ public:
         if (plan.statements_recovered == 0) {
             plan.action = RecoveryAction::COMPLETE_FAILURE;
             plan.fallback_json = generate_fallback_json(ast, plan);
-        } else if (plan.statements_recovered < plan.statements_total) {
-            plan.action = RecoveryAction::PARTIAL_SUCCESS;
-            plan.recovery_instruction = generate_recovery_instruction(ast, plan, original_payload);
         } else {
             plan.action = RecoveryAction::REPARSE_SUGGESTED;
             plan.recovery_instruction = generate_recovery_instruction(ast, plan, original_payload);
@@ -108,7 +110,7 @@ public:
         oss << "  1. Check for unclosed quotes or brackets in the payload\n";
         oss << "  2. Verify escape sequences (\\n, \\t, \\\\, \\\")\n";
         oss << "  3. Ensure all role declarations end with ]\n";
-        oss << "  4. Validate capability tokens (cap=...) have matching ttl=...\n";
+        oss << "  4. Keep values free of spaces: 'GL:fix the leak' splits into separate fields\n";
         oss << "  5. Re-validate the header (VER, CHK, AGT, UID, TIM, REQID)\n";
 
         oss << "\nORIGINAL_PAYLOAD_HASH:djb2:" << compute_simple_hash(original_payload) << "\n";
@@ -136,9 +138,6 @@ public:
                 break;
             case RecoveryAction::REPARSE_SUGGESTED:
                 js += "reparse_suggested";
-                break;
-            case RecoveryAction::PARTIAL_SUCCESS:
-                js += "partial_success";
                 break;
             case RecoveryAction::COMPLETE_FAILURE:
                 js += "complete_failure";
@@ -199,11 +198,6 @@ public:
                 break;
             case RecoveryAction::REPARSE_SUGGESTED:
                 std::cout << "REPARSE SUGGESTED\n";
-                std::cout << plan.recovery_instruction << "\n";
-                break;
-            case RecoveryAction::PARTIAL_SUCCESS:
-                std::cout << "PARTIAL SUCCESS (" << plan.statements_recovered 
-                          << "/" << plan.statements_total << " statements)\n";
                 std::cout << plan.recovery_instruction << "\n";
                 break;
             case RecoveryAction::COMPLETE_FAILURE:
