@@ -84,3 +84,9 @@ Token counts measured with a **real `cl100k_base` (tiktoken) BPE tokenizer** acr
 | **Out-of-Band Proxy Mode vs Minified JSON** | **25.9%** | 24.4% – 28.0% |
 
 > **Honest Metric Clarification:** Earlier unverified claims of "~60% savings across all baselines" were derived from an informal character heuristic that over-counted punctuation. Real BPE tokenization shows **+25.9% net savings vs minified JSON** on full contexts and **-75% savings on output tool call turns** when out-of-band proxy auth is enabled.
+
+---
+
+## License
+
+This project is licensed under the [MIT License](file:///C:/Development/LLM/LLMTOP/LICENSE) — see the LICENSE file for details.
