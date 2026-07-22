@@ -371,8 +371,8 @@ int main() {
             "Authenticated Code Reader",
             // LLM-TOP
             "VER:LLM-TOPv1 CHK:sha256:1111 AGT:reader UID:anon TIM:2026-07-18 REQID:req1 FALLBACK:json\n"
-            "[READER] tgt:../LLM_Mock/auth_spec.txt:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789 act:analyze GL:summarize_requirements\n"
-            "!read[path=../LLM_Mock/auth_spec.txt;cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789]\n",
+            "[READER] tgt:src/auth_spec.txt:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789 act:analyze GL:summarize_requirements\n"
+            "!read[path=src/auth_spec.txt;cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789]\n",
             // Verbose JSON
             "{\n"
             "  \"version\": \"LLM-TOPv1\",\n"
@@ -386,7 +386,7 @@ int main() {
             "    {\n"
             "      \"role\": \"READER\",\n"
             "      \"kvpairs\": {\n"
-            "        \"tgt\": \"../LLM_Mock/auth_spec.txt:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\",\n"
+            "        \"tgt\": \"src/auth_spec.txt:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\",\n"
             "        \"act\": \"analyze\",\n"
             "        \"GL\": \"summarize_requirements\"\n"
             "      },\n"
@@ -394,7 +394,7 @@ int main() {
             "        {\n"
             "          \"tool\": \"read\",\n"
             "          \"args\": {\n"
-            "            \"path\": \"../LLM_Mock/auth_spec.txt\",\n"
+            "            \"path\": \"src/auth_spec.txt\",\n"
             "            \"cap\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\"\n"
             "          }\n"
             "        }\n"
@@ -403,9 +403,9 @@ int main() {
             "  ]\n"
             "}",
             // Minimal JSON
-            "{\"v\":\"LLM-TOPv1\",\"c\":\"sha256:1111\",\"a\":\"reader\",\"u\":\"anon\",\"t\":\"2026-07-18\",\"r\":\"req1\",\"f\":\"json\",\"s\":[{\"o\":\"READER\",\"k\":{\"t\":\"../LLM_Mock/auth_spec.txt:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\",\"a\":\"analyze\",\"G\":\"summarize_requirements\"},\"c\":[{\"t\":\"read\",\"a\":{\"p\":\"../LLM_Mock/auth_spec.txt\",\"c\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\"}}]}]}",
+            "{\"v\":\"LLM-TOPv1\",\"c\":\"sha256:1111\",\"a\":\"reader\",\"u\":\"anon\",\"t\":\"2026-07-18\",\"r\":\"req1\",\"f\":\"json\",\"s\":[{\"o\":\"READER\",\"k\":{\"t\":\"src/auth_spec.txt:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\",\"a\":\"analyze\",\"G\":\"summarize_requirements\"},\"c\":[{\"t\":\"read\",\"a\":{\"p\":\"src/auth_spec.txt\",\"c\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\"}}]}]}",
             // Compact JSON
-            "{\"version\":\"LLM-TOPv1\",\"checksum\":\"sha256:1111\",\"agent\":\"reader\",\"uid\":\"anon\",\"time\":\"2026-07-18\",\"reqid\":\"req1\",\"fallback\":\"json\",\"statements\":[{\"role\":\"READER\",\"kvpairs\":{\"tgt\":\"../LLM_Mock/auth_spec.txt:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\",\"act\":\"analyze\",\"GL\":\"summarize_requirements\"},\"commands\":[{\"tool\":\"read\",\"args\":{\"path\":\"../LLM_Mock/auth_spec.txt\",\"cap\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\"}}]}]}",
+            "{\"version\":\"LLM-TOPv1\",\"checksum\":\"sha256:1111\",\"agent\":\"reader\",\"uid\":\"anon\",\"time\":\"2026-07-18\",\"reqid\":\"req1\",\"fallback\":\"json\",\"statements\":[{\"role\":\"READER\",\"kvpairs\":{\"tgt\":\"src/auth_spec.txt:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\",\"act\":\"analyze\",\"GL\":\"summarize_requirements\"},\"commands\":[{\"tool\":\"read\",\"args\":{\"path\":\"src/auth_spec.txt\",\"cap\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\"}}]}]}",
             // YAML
             "version: LLM-TOPv1\n"
             "checksum: sha256:1111\n"
@@ -417,13 +417,13 @@ int main() {
             "statements:\n"
             "  - role: READER\n"
             "    kvpairs:\n"
-            "      tgt: ../LLM_Mock/auth_spec.txt:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\n"
+            "      tgt: src/auth_spec.txt:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\n"
             "      act: analyze\n"
             "      GL: summarize_requirements\n"
             "    commands:\n"
             "      - tool: read\n"
             "        args:\n"
-            "          path: ../LLM_Mock/auth_spec.txt\n"
+            "          path: src/auth_spec.txt\n"
             "          cap: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\n"
         },
         // Scenario 7: Pathfinding Executor
@@ -431,8 +431,8 @@ int main() {
             "Pathfinding Executor",
             // LLM-TOP
             "VER:LLM-TOPv1 CHK:sha256:2222 AGT:coder UID:anon TIM:2026-07-18 REQID:req2 FALLBACK:json\n"
-            "[EXEC] tgt:../LLM_Mock/astar.cpp:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789 act:execute GL:run_astar\n"
-            "!run[target=../LLM_Mock/astar.cpp;cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789]\n",
+            "[EXEC] tgt:src/astar.cpp:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789 act:execute GL:run_astar\n"
+            "!run[target=src/astar.cpp;cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789]\n",
             // Verbose JSON
             "{\n"
             "  \"version\": \"LLM-TOPv1\",\n"
@@ -446,7 +446,7 @@ int main() {
             "    {\n"
             "      \"role\": \"EXEC\",\n"
             "      \"kvpairs\": {\n"
-            "        \"tgt\": \"../LLM_Mock/astar.cpp:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\",\n"
+            "        \"tgt\": \"src/astar.cpp:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\",\n"
             "        \"act\": \"execute\",\n"
             "        \"GL\": \"run_astar\"\n"
             "      },\n"
@@ -454,7 +454,7 @@ int main() {
             "        {\n"
             "          \"tool\": \"run\",\n"
             "          \"args\": {\n"
-            "            \"target\": \"../LLM_Mock/astar.cpp\",\n"
+            "            \"target\": \"src/astar.cpp\",\n"
             "            \"cap\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\"\n"
             "          }\n"
             "        }\n"
@@ -463,9 +463,9 @@ int main() {
             "  ]\n"
             "}",
             // Minimal JSON
-            "{\"v\":\"LLM-TOPv1\",\"c\":\"sha256:2222\",\"a\":\"coder\",\"u\":\"anon\",\"t\":\"2026-07-18\",\"r\":\"req2\",\"f\":\"json\",\"s\":[{\"o\":\"EXEC\",\"k\":{\"t\":\"../LLM_Mock/astar.cpp:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\",\"a\":\"execute\",\"G\":\"run_astar\"},\"c\":[{\"t\":\"run\",\"a\":{\"t\":\"../LLM_Mock/astar.cpp\",\"c\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\"}}]}]}",
+            "{\"v\":\"LLM-TOPv1\",\"c\":\"sha256:2222\",\"a\":\"coder\",\"u\":\"anon\",\"t\":\"2026-07-18\",\"r\":\"req2\",\"f\":\"json\",\"s\":[{\"o\":\"EXEC\",\"k\":{\"t\":\"src/astar.cpp:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\",\"a\":\"execute\",\"G\":\"run_astar\"},\"c\":[{\"t\":\"run\",\"a\":{\"t\":\"src/astar.cpp\",\"c\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\"}}]}]}",
             // Compact JSON
-            "{\"version\":\"LLM-TOPv1\",\"checksum\":\"sha256:2222\",\"agent\":\"coder\",\"uid\":\"anon\",\"time\":\"2026-07-18\",\"reqid\":\"req2\",\"fallback\":\"json\",\"statements\":[{\"role\":\"EXEC\",\"kvpairs\":{\"tgt\":\"../LLM_Mock/astar.cpp:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\",\"act\":\"execute\",\"GL\":\"run_astar\"},\"commands\":[{\"tool\":\"run\",\"args\":{\"target\":\"../LLM_Mock/astar.cpp\",\"cap\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\"}}]}]}",
+            "{\"version\":\"LLM-TOPv1\",\"checksum\":\"sha256:2222\",\"agent\":\"coder\",\"uid\":\"anon\",\"time\":\"2026-07-18\",\"reqid\":\"req2\",\"fallback\":\"json\",\"statements\":[{\"role\":\"EXEC\",\"kvpairs\":{\"tgt\":\"src/astar.cpp:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\",\"act\":\"execute\",\"GL\":\"run_astar\"},\"commands\":[{\"tool\":\"run\",\"args\":{\"target\":\"src/astar.cpp\",\"cap\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\"}}]}]}",
             // YAML
             "version: LLM-TOPv1\n"
             "checksum: sha256:2222\n"
@@ -477,13 +477,13 @@ int main() {
             "statements:\n"
             "  - role: EXEC\n"
             "    kvpairs:\n"
-            "      tgt: ../LLM_Mock/astar.cpp:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\n"
+            "      tgt: src/astar.cpp:cap=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\n"
             "      act: execute\n"
             "      GL: run_astar\n"
             "    commands:\n"
             "      - tool: run\n"
             "        args:\n"
-            "          target: ../LLM_Mock/astar.cpp\n"
+            "          target: src/astar.cpp\n"
             "          cap: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyZWFkZXIiLCJzY29wZSI6ImV4ZWN1dGU6cmVhZGF1dGhfc3BlYyIsInR5cGUiOiJKV1QifQ.sig_hash_dummy_val_123456789\n"
         }
     };
