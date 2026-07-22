@@ -136,8 +136,32 @@ struct AST {
     std::vector<Statement> healed_draft;
     std::string diagnostic;
     bool recovery_attempted = false;
-    std::string raw_body; // payload bytes after the header line, for CHK integrity verification
+    std::string raw_frame; // the entire payload, for CHK integrity verification
 };
+
+// Canonical form for CHK computation: the whole frame with the CHK header's own
+// value blanked out.
+//
+// CHK previously digested only the body (everything after the first newline),
+// which left the identity header -- AGT, UID, TIM, REQID -- outside the check.
+// An agent id could therefore be rewritten in flight and the checksum still
+// verified. Blanking only CHK's own value lets the digest cover the header
+// without the digest having to contain itself.
+//
+// Note this is an UNKEYED digest: it detects truncation and corruption, not a
+// deliberate attacker, who can simply recompute it. Authentication comes from
+// capabilities, not from CHK.
+inline std::string canonical_for_chk(const std::string& frame) {
+    const std::string marker = "CHK:sha256:";
+    size_t p = frame.find(marker);
+    if (p == std::string::npos) return frame;
+    size_t start = p + marker.size();
+    size_t end = frame.find_first_of(" \r\n", start);
+    if (end == std::string::npos) end = frame.size();
+    std::string out = frame;
+    out.erase(start, end - start);
+    return out;
+}
 
 // escapeJson removed — use escape_json() from json_utils.hpp
 
@@ -198,9 +222,8 @@ public:
             handleError(ast, "Payload size exceeds maximum allowed limit");
             return ast;
         }
-        // Capture the body (everything after the first line) so the CHK header can be verified.
-        size_t first_nl = payload.find('\n');
-        ast.raw_body = (first_nl == std::string::npos) ? std::string("") : payload.substr(first_nl + 1);
+        // Capture the whole frame so CHK can be verified over the header too.
+        ast.raw_frame = payload;
         std::istringstream stream(payload);
         std::string line;
 
@@ -228,6 +251,18 @@ public:
             line.erase(line.find_last_not_of(" \r\t") + 1);
             if (line.empty()) continue;
 
+            // A role line begins a new statement, so flush the previous one
+            // BEFORE any healing on this line is recorded. Doing it the other
+            // way round attributed this line's heal to the statement that came
+            // before it, quarantining the clean statement and letting the
+            // malformed one through as trusted.
+            if (line[0] == '[' &&
+                (has_role || !current_stmt.kvpairs.empty() || !current_stmt.tool_calls.empty())) {
+                push_current_stmt(current_stmt, current_stmt_healed);
+                current_stmt = Statement();
+                current_stmt_healed = false;
+            }
+
             // Self-healing: count unescaped quotes and append missing closing quote
             bool in_quotes = false;
             bool in_escape = false;
@@ -251,11 +286,6 @@ public:
             }
 
             if (line[0] == '[') {
-                if (has_role || !current_stmt.kvpairs.empty() || !current_stmt.tool_calls.empty()) {
-                    push_current_stmt(current_stmt, current_stmt_healed);
-                    current_stmt = Statement();
-                    current_stmt_healed = false;
-                }
                 size_t end_bracket = line.find(']');
                 if (end_bracket == std::string::npos) {
                     if (mode_ == Mode::TOLERANT) {

@@ -547,8 +547,181 @@ void test_multi_depth_glob_matching() {
     std::cout << "[PASS] test_multi_depth_glob_matching\n";
 }
 
+// --- Phase 1 security hardening ------------------------------------------
+
+// S1: the alg header must select the verifier, not merely pass a name check.
+// Previously alg was compared against a hardcoded list and then ignored, so a
+// token claiming Ed25519 was happily verified with the HMAC shared secret.
+void test_alg_binds_to_verifier() {
+    auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
+
+    auto signed_with_hmac = [&](const std::string& alg_json) {
+        std::string h = SimpleJWTValidator::base64url_encode(alg_json);
+        std::string pl = SimpleJWTValidator::base64url_encode(
+            "{\"sub\":\"planner\",\"scope\":\"execute:read:*\",\"exp\":9999999999}");
+        auto sig = HMAC_SHA256::compute(TEST_SECRET, h + "." + pl);
+        std::string s = SimpleJWTValidator::base64url_encode(
+            std::string(reinterpret_cast<const char*>(sig.data()), sig.size()));
+        return h + "." + pl + "." + s;
+    };
+
+    // HS256 is the one algorithm this build ships a verifier for.
+    CHECK(validator->verify(signed_with_hmac("{\"alg\":\"HS256\",\"typ\":\"JWT\"}"),
+                            "execute:read:x").valid);
+
+    // Every other alg must be rejected even when the HMAC signature is valid.
+    for (const char* alg : {"Ed25519", "EdDSA", "RS256", "HS512", "none", ""}) {
+        const std::string token =
+            signed_with_hmac(std::string("{\"alg\":\"") + alg + "\",\"typ\":\"JWT\"}");
+        CHECK(!validator->verify(token, "execute:read:x").valid);
+    }
+
+    std::cout << "[PASS] test_alg_binds_to_verifier\n";
+}
+
+// S2: '*' matches exactly one path segment; '**' is the multi-depth form.
+// Previously both were an unanchored string-prefix test, so they behaved
+// identically and a prefix could escape its segment entirely.
+void test_glob_is_single_level() {
+    // Single-level: matches within one segment, never across '/'.
+    CHECK(SimpleJWTValidator::scope_matches("read:src/*", "read:src/main.cpp"));
+    CHECK(!SimpleJWTValidator::scope_matches("read:src/*", "read:src/sub/deep.cpp"));
+    CHECK(!SimpleJWTValidator::scope_matches("read:src/*", "read:src/a/b/c.cpp"));
+
+    // Multi-depth still spans directories.
+    CHECK(SimpleJWTValidator::scope_matches("read:src/**", "read:src/main.cpp"));
+    CHECK(SimpleJWTValidator::scope_matches("read:src/**", "read:src/sub/deep.cpp"));
+
+    // A prefix must not escape its segment: src* must not reach src_secrets/.
+    CHECK(!SimpleJWTValidator::scope_matches("read:src*", "read:src_secrets/key.pem"));
+    CHECK(!SimpleJWTValidator::scope_matches("read:src/*", "read:other/main.cpp"));
+
+    // Traversal still cannot climb out of a granted subtree.
+    CHECK(!SimpleJWTValidator::scope_matches("read:src/**", "read:src/../../etc/passwd"));
+
+    std::cout << "[PASS] test_glob_is_single_level\n";
+}
+
+// S3: claims are read from the top-level object only. The previous substring
+// search matched the first "scope":" anywhere in the payload, so a nested
+// object from a standards-conformant issuer could override the real claim.
+void test_nested_claims_do_not_override() {
+    auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
+
+    std::string h = SimpleJWTValidator::base64url_encode("{\"alg\":\"HS256\",\"typ\":\"JWT\"}");
+    std::string pl = SimpleJWTValidator::base64url_encode(
+        "{\"sub\":\"planner\",\"realm_access\":{\"scope\":\"execute:**\",\"sub\":\"root\"},"
+        "\"scope\":\"execute:read:docs\",\"exp\":9999999999}");
+    auto sig = HMAC_SHA256::compute(TEST_SECRET, h + "." + pl);
+    std::string s = SimpleJWTValidator::base64url_encode(
+        std::string(reinterpret_cast<const char*>(sig.data()), sig.size()));
+
+    auto claim = validator->verify(h + "." + pl + "." + s);
+    CHECK(claim.valid);
+    CHECK_EQ(claim.scope, "execute:read:docs");
+    CHECK_EQ(claim.sub, "planner");
+
+    std::cout << "[PASS] test_nested_claims_do_not_override\n";
+}
+
+// S5: a REQID must be consumed only when the request is actually authorized.
+// It used to be recorded before the capability checks ran, so anyone who could
+// guess a REQID could pre-burn it and permanently block the legitimate request.
+void test_reqid_not_burned_by_rejection() {
+    auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
+    LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+    LLMTOPMiddleware middleware(validator);
+    middleware.set_enforce_idempotency(true);
+
+    // An unauthorized request must not consume its REQID.
+    AST bad = parser.parse(fix_chk(
+        "VER:LLM-TOPv1 CHK:sha256:abcd AGT:agent1 UID:u TIM:t REQID:req-42 FALLBACK:json\n"
+        "!read[path=src/a.cpp]\n"));
+    auto rejected = middleware.evaluate(bad);
+    CHECK(!rejected.authorized);
+
+    // The legitimate request carrying the same REQID must still go through.
+    std::string cap = validator->create_token("agent1", "execute:read:*", 9999999999LL);
+    AST good = parser.parse(fix_chk(
+        "VER:LLM-TOPv1 CHK:sha256:abcd AGT:agent1 UID:u TIM:t REQID:req-42 FALLBACK:json\n"
+        "!read[path=src/a.cpp;cap=" + cap + "]\n"));
+    auto accepted = middleware.evaluate(good);
+    CHECK(accepted.authorized);
+
+    // Having succeeded, it is now consumed: a real replay is rejected.
+    auto replayed = middleware.evaluate(good);
+    CHECK(!replayed.authorized);
+    CHECK_CONTAINS(replayed.error_message, "ERR:replay_detected");
+
+    std::cout << "[PASS] test_reqid_not_burned_by_rejection\n";
+}
+
+// S5: the store must expire entries by time and must fail closed rather than
+// evict a live guard, so an attacker cannot reopen a replay window by flooding.
+void test_idempotency_store_expiry_and_capacity() {
+    using RR = IdempotencyStore::RecordResult;
+
+    // A zero TTL makes every entry stale immediately, so the id is free again.
+    IdempotencyStore expiring(1000, /*ttl_seconds=*/0);
+    CHECK(expiring.record_request("a", "r1", "chk") == RR::Recorded);
+    CHECK(expiring.record_request("a", "r1", "chk") == RR::Recorded);
+
+    // Within the TTL, the same id is a replay.
+    IdempotencyStore live(1000, /*ttl_seconds=*/3600);
+    CHECK(live.record_request("a", "r1", "chk") == RR::Recorded);
+    CHECK(live.record_request("a", "r1", "chk") == RR::Replay);
+
+    // Full of unexpired guards: refuse rather than silently forget one.
+    IdempotencyStore tiny(2, /*ttl_seconds=*/3600);
+    CHECK(tiny.record_request("a", "r1", "chk") == RR::Recorded);
+    CHECK(tiny.record_request("a", "r2", "chk") == RR::Recorded);
+    CHECK(tiny.record_request("a", "r3", "chk") == RR::CapacityExceeded);
+
+    std::cout << "[PASS] test_idempotency_store_expiry_and_capacity\n";
+}
+
+// S4: CHK must cover the identity header, not just the body. It used to digest
+// only the bytes after the first newline, so AGT/UID/TIM/REQID sat outside the
+// check and an agent id could be rewritten in flight while CHK still verified.
+void test_chk_covers_identity_header() {
+    auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
+    LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+    LLMTOPMiddleware middleware(validator);
+
+    const std::string signed_frame = fix_chk(
+        "VER:LLM-TOPv1 CHK:sha256:abcd AGT:lowpriv UID:u1 TIM:2026-07-18 REQID:r1 FALLBACK:json\n"
+        "[PLAN] GL:do_thing\n");
+
+    // Baseline: the untouched frame authorizes.
+    CHECK(middleware.evaluate(parser.parse(signed_frame)).authorized);
+
+    // Rewriting any identity field must now break integrity.
+    const std::pair<std::string, std::string> tamperings[] = {
+        {"AGT:lowpriv", "AGT:rootagt"},
+        {"REQID:r1", "REQID:r9"},
+        {"UID:u1", "UID:u9"},
+        {"TIM:2026-07-18", "TIM:2020-01-01"},
+        {"GL:do_thing", "GL:do_EVILx"},   // body still covered too
+    };
+    for (const auto& [from, to] : tamperings) {
+        std::string tampered = signed_frame;
+        tampered.replace(tampered.find(from), from.size(), to);
+        auto plan = middleware.evaluate(parser.parse(tampered));
+        CHECK(!plan.authorized);
+        CHECK_CONTAINS(plan.error_message, "ERR:integrity");
+    }
+
+    std::cout << "[PASS] test_chk_covers_identity_header\n";
+}
+
 int main() {
     std::cout << "Running LLM-TOP Middleware Tests (Real HMAC-SHA256)...\n";
+    test_chk_covers_identity_header();
+    test_reqid_not_burned_by_rejection();
+    test_idempotency_store_expiry_and_capacity();
+    test_alg_binds_to_verifier();
+    test_glob_is_single_level();
+    test_nested_claims_do_not_override();
     test_fail_open_default_deny();
     test_checksum_integrity();
     test_ttl_enforcement();

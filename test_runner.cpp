@@ -180,6 +180,36 @@ void test_json_header_fidelity() {
     std::cout << "[PASS] test_json_header_fidelity\n";
 }
 
+// S6: a self-healed line must quarantine the statement it belongs to, not the
+// previous one. The heal flag used to be set before the previous statement was
+// flushed, so a clean statement landed in healed_draft (which the middleware
+// rejects) while the malformed one landed in statements (which it accepts) --
+// exactly inverting the control.
+void test_healed_flag_attribution() {
+    LLMTOPParser parser(LLMTOPParser::Mode::TOLERANT);
+    AST ast = parser.parse(
+        "VER:LLM-TOPv1 CHK:sha256:x AGT:a UID:u TIM:t REQID:r\n"
+        "[CLEAN] act:ok\n"
+        "[BROKEN] ctx:\"unterminated act:evil\n");
+
+    CHECK_EQ(ast.statements.size(), 1u);
+    CHECK_EQ(ast.statements[0].role, "CLEAN");
+    CHECK_EQ(ast.healed_draft.size(), 1u);
+    CHECK_EQ(ast.healed_draft[0].role, "BROKEN");
+
+    // The same must hold when the healed role line is the very first statement.
+    AST first = parser.parse(
+        "VER:LLM-TOPv1 CHK:sha256:x AGT:a UID:u TIM:t REQID:r\n"
+        "[BROKEN] ctx:\"unterminated act:evil\n"
+        "[CLEAN] act:ok\n");
+    CHECK_EQ(first.statements.size(), 1u);
+    CHECK_EQ(first.statements[0].role, "CLEAN");
+    CHECK_EQ(first.healed_draft.size(), 1u);
+    CHECK_EQ(first.healed_draft[0].role, "BROKEN");
+
+    std::cout << "[PASS] test_healed_flag_attribution\n";
+}
+
 int main() {
     std::cout << "Running LLM-TOP Parser Tests v3...\n";
     test_quoted_strings();
@@ -188,6 +218,7 @@ int main() {
     test_tool_name_trimming();
     test_ordered_serialization();
     test_json_header_fidelity();
+    test_healed_flag_attribution();
     std::cout << "All tests completed successfully.\n";
     return TEST_SUMMARY("core_tests");
 }

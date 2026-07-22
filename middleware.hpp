@@ -14,11 +14,17 @@
 #include <string_view>
 #include <sstream>
 #include <mutex>
+#include <functional>
+#include <cctype>
 
-// Real JWT validator for capability tokens using HMAC-SHA256.
-// Implements proper base64url encoding/decoding, signature verification,
-// and claim extraction per RFC 7519.
-// For production at scale, replace HMAC-SHA256 with RS256/EdDSA via OpenSSL.
+// JWT validator for capability tokens.
+//
+// This build ships exactly one signature algorithm: HMAC-SHA256 ("HS256").
+// Algorithms are held in a registry keyed by the token's `alg` header, so an
+// algorithm with no registered verifier has no code path that reaches
+// signature verification at all. A host needing asymmetric auth registers its
+// own verifier backed by its own crypto library via register_verifier(); this
+// project deliberately does not hand-roll curve arithmetic.
 
 class SimpleJWTValidator {
 public:
@@ -31,14 +37,19 @@ public:
         bool valid = false;
     };
 
-    enum class Algorithm { HS256, Ed25519 };
+    // Verifies `signature` (raw decoded bytes) over `signing_input`
+    // ("<header_b64>.<payload_b64>"). Returns true only on a valid signature.
+    using Verifier = std::function<bool(const std::string& signing_input,
+                                        const std::string& signature)>;
 
-    void set_public_key(const std::string& public_key_b64) {
-        public_key_b64_ = public_key_b64;
+    // Register a verifier for an `alg` header value. Registering an algorithm
+    // is the ONLY way to make tokens carrying it verifiable.
+    void register_verifier(const std::string& alg, Verifier verifier) {
+        verifiers_[alg] = std::move(verifier);
     }
 
     // Initialize validator with a shared secret key for HMAC-SHA256
-    SimpleJWTValidator(const std::string& shared_secret = "", 
+    SimpleJWTValidator(const std::string& shared_secret = "",
                        bool insecure_test_mode = false,
                        const std::string& expected_iss = "",
                        const std::string& expected_aud = "")
@@ -55,6 +66,16 @@ public:
                 throw std::runtime_error("Empty JWT secret key. Enforce security by setting LLM_TOP_JWT_SECRET environment variable.");
             }
         }
+
+        // The one algorithm shipped in-tree.
+        verifiers_["HS256"] = [this](const std::string& signing_input,
+                                     const std::string& signature) {
+            if (signature.size() != SHA256::DIGEST_SIZE) return false;
+            auto expected = HMAC_SHA256::compute(shared_secret_, signing_input);
+            std::array<uint8_t, SHA256::DIGEST_SIZE> received;
+            std::memcpy(received.data(), signature.data(), SHA256::DIGEST_SIZE);
+            return HMAC_SHA256::verify(expected, received);
+        };
     }
 
     // Create a signed JWT token for testing and internal use
@@ -102,25 +123,21 @@ public:
 
         if (signature_b64.empty()) return claim;
 
-        // Step 1: Decode header and verify alg is HS256 or Ed25519
+        // Step 1: the alg header selects the verifier. An algorithm with no
+        // registered verifier is rejected here, so there is no path by which a
+        // token's claimed alg can differ from the algorithm actually used to
+        // check it. ("none" and every unregistered alg fall out here.)
         std::string decoded_header = base64url_decode(header_b64);
         std::string alg = extract_string_claim(decoded_header, "alg");
-        if (alg != "HS256" && alg != "Ed25519") {
-            return claim; // Reject none and unsupported algs
+        auto verifier_it = verifiers_.find(alg);
+        if (verifier_it == verifiers_.end()) {
+            return claim;
         }
 
-        // Step 2: Verify HMAC-SHA256 signature
+        // Step 2: Verify the signature with that algorithm's verifier.
         std::string signing_input = header_b64 + "." + payload_b64;
-        auto expected_sig = HMAC_SHA256::compute(shared_secret_, signing_input);
-        
         std::string decoded_sig = base64url_decode(signature_b64);
-        if (decoded_sig.size() != SHA256::DIGEST_SIZE) return claim;
-        
-        std::array<uint8_t, SHA256::DIGEST_SIZE> received_sig;
-        std::memcpy(received_sig.data(), decoded_sig.data(), SHA256::DIGEST_SIZE);
-        
-        if (!HMAC_SHA256::verify(expected_sig, received_sig)) {
-            // Signature mismatch — reject
+        if (!verifier_it->second(signing_input, decoded_sig)) {
             return claim;
         }
 
@@ -285,74 +302,158 @@ public:
         return result;
     }
 
-    // Check if scope pattern matches requested resource (split on :, * matches single segment, ** matches multi-depth)
+    // Match one path segment against a pattern segment. A '*' inside a segment
+    // is a wildcard for part of that segment only — it can never span a '/',
+    // because callers only ever hand this a single already-split segment.
+    static bool segment_matches(std::string_view pattern, std::string_view segment) {
+        size_t star = pattern.find('*');
+        if (star == std::string_view::npos) return pattern == segment;
+        std::string_view prefix = pattern.substr(0, star);
+        std::string_view suffix = pattern.substr(star + 1);
+        if (segment.size() < prefix.size() + suffix.size()) return false;
+        if (segment.compare(0, prefix.size(), prefix) != 0) return false;
+        if (suffix.empty()) return true;
+        return segment.compare(segment.size() - suffix.size(), suffix.size(), suffix) == 0;
+    }
+
+    // Match a slash-delimited path against a pattern.
+    //   '*'  matches exactly one path segment and never crosses '/'
+    //   '**' matches all remaining segments
+    // Both sides must already be normalized, so a traversal that climbs out of
+    // the granted subtree presents as a leading ".." segment and fails to match.
+    static bool path_glob_matches(const std::string& pattern, const std::string& path) {
+        auto p = split_scope_sv(pattern, '/');
+        auto t = split_scope_sv(path, '/');
+        size_t i = 0;
+        for (; i < p.size(); ++i) {
+            if (p[i] == "**") return true;   // absorbs every remaining segment
+            if (i >= t.size()) return false;
+            if (p[i] == "*") continue;       // exactly one segment
+            if (!segment_matches(p[i], t[i])) return false;
+        }
+        return i == t.size();               // no unmatched trailing segments
+    }
+
+    // Check if a granted scope authorizes a requested one. Scopes are split on
+    // ':' into action/resource segments; the resource segment is then matched
+    // as a path so that '*' cannot silently span directories.
     static bool scope_matches(const std::string& granted, const std::string& requested) {
         if (granted == "**") return true;
         auto g_segs = split_scope_sv(granted, ':');
         auto r_segs = split_scope_sv(requested, ':');
-        
+
         for (size_t i = 0; i < g_segs.size(); ++i) {
-            if (g_segs[i] == "**") return true; // Multi-depth glob match
+            if (g_segs[i] == "**") return true; // grants everything from here on
             if (i >= r_segs.size()) return false;
-            if (g_segs[i] == "*") continue;
-            
+            if (g_segs[i] == "*") continue;     // any one colon-segment
+
             std::string g_norm = normalize_path_segment(std::string(g_segs[i]));
             std::string r_norm = normalize_path_segment(std::string(r_segs[i]));
 
-            if (g_norm == "**") return true;
-
-            if (g_norm.find('*') != std::string::npos) {
-                std::string pattern = g_norm.substr(0, g_norm.find('*'));
-                if (r_norm.substr(0, pattern.length()) != pattern) {
-                    return false;
-                }
-            } else if (g_norm != r_norm) {
-                return false;
-            }
+            if (!path_glob_matches(g_norm, r_norm)) return false;
         }
         return g_segs.size() == r_segs.size();
     }
 
 private:
     std::string shared_secret_;
-    std::string public_key_b64_;
     std::string expected_iss_;
     std::string expected_aud_;
+    std::unordered_map<std::string, Verifier> verifiers_;
 
-    // Extract a string claim value from simplified JSON (escape-aware)
-    std::string extract_string_claim(const std::string& json, const std::string& key) {
-        std::string search = "\"" + key + "\":\"";
-        size_t pos = json.find(search);
-        if (pos == std::string::npos) return "";
-        size_t start = pos + search.length();
-        std::string val;
-        bool escaped = false;
-        for (size_t i = start; i < json.length(); ++i) {
-            char c = json[i];
-            if (escaped) {
-                val += c;
-                escaped = false;
-            } else if (c == '\\') {
-                escaped = true;
-            } else if (c == '"') {
-                return val;
-            } else {
-                val += c;
+    // Return the raw JSON text of a key's value from the TOP-LEVEL object only.
+    //
+    // The previous implementation searched for "\"<key>\":\"" anywhere in the
+    // payload, so the first textual match won -- including one inside a nested
+    // object. A standards-conformant issuer that nests per-client scopes (a
+    // Keycloak-style "realm_access": {"scope": ...}) could therefore override
+    // the real top-level claim. This walks the object properly, skipping over
+    // nested objects, arrays and strings.
+    static std::string top_level_raw(const std::string& json, const std::string& key) {
+        size_t i = 0, n = json.size();
+        while (i < n && json[i] != '{') ++i;
+        if (i == n) return "";
+        ++i;
+
+        auto skip_ws = [&]() {
+            while (i < n && std::isspace(static_cast<unsigned char>(json[i]))) ++i;
+        };
+
+        while (i < n) {
+            while (i < n && (std::isspace(static_cast<unsigned char>(json[i])) || json[i] == ',')) ++i;
+            if (i >= n || json[i] == '}') break;
+            if (json[i] != '"') break;  // malformed: keys must be strings
+
+            // Key
+            std::string k;
+            ++i;
+            bool esc = false;
+            for (; i < n; ++i) {
+                char c = json[i];
+                if (esc)            { k += c; esc = false; }
+                else if (c == '\\') { esc = true; }
+                else if (c == '"')  { ++i; break; }
+                else                { k += c; }
             }
+
+            skip_ws();
+            if (i >= n || json[i] != ':') break;
+            ++i;
+            skip_ws();
+
+            // Value
+            size_t vstart = i;
+            if (i < n && json[i] == '"') {
+                ++i; esc = false;
+                for (; i < n; ++i) {
+                    char c = json[i];
+                    if (esc)            esc = false;
+                    else if (c == '\\') esc = true;
+                    else if (c == '"')  { ++i; break; }
+                }
+            } else if (i < n && (json[i] == '{' || json[i] == '[')) {
+                int depth = 0;
+                bool in_string = false;
+                esc = false;
+                for (; i < n; ++i) {
+                    char c = json[i];
+                    if (in_string) {
+                        if (esc)            esc = false;
+                        else if (c == '\\') esc = true;
+                        else if (c == '"')  in_string = false;
+                    } else if (c == '"')           { in_string = true; }
+                    else if (c == '{' || c == '[') { ++depth; }
+                    else if (c == '}' || c == ']') { if (--depth == 0) { ++i; break; } }
+                }
+            } else {
+                while (i < n && json[i] != ',' && json[i] != '}') ++i;
+            }
+
+            if (k == key) return json.substr(vstart, i - vstart);
         }
         return "";
     }
 
-    // Extract an integer claim value from simplified JSON
-    int64_t extract_int_claim(const std::string& json, const std::string& key) {
-        std::string search = "\"" + key + "\":";
-        size_t pos = json.find(search);
-        if (pos == std::string::npos) return 0;
-        size_t start = pos + search.length();
-        size_t end = json.find_first_not_of("0123456789", start);
-        if (end == std::string::npos) end = json.length();
+    // Extract a top-level string claim, unescaping the JSON string body.
+    static std::string extract_string_claim(const std::string& json, const std::string& key) {
+        std::string raw = top_level_raw(json, key);
+        if (raw.size() < 2 || raw.front() != '"' || raw.back() != '"') return "";
+        std::string val;
+        bool esc = false;
+        for (size_t i = 1; i + 1 < raw.size(); ++i) {
+            char c = raw[i];
+            if (esc)            { val += c; esc = false; }
+            else if (c == '\\') { esc = true; }
+            else                { val += c; }
+        }
+        return val;
+    }
+
+    // Extract a top-level integer claim.
+    static int64_t extract_int_claim(const std::string& json, const std::string& key) {
+        std::string raw = top_level_raw(json, key);
         try {
-            return std::stoll(json.substr(start, end - start));
+            return std::stoll(raw);
         } catch (...) {
             return 0;
         }
@@ -361,29 +462,45 @@ private:
 
 class IdempotencyStore {
 public:
-    explicit IdempotencyStore(size_t max_entries = 1000) : max_entries_(max_entries) {}
+    enum class RecordResult {
+        Recorded,          // first time this (agent, reqid) has been seen
+        Replay,            // already executed within the TTL
+        CapacityExceeded   // store is full of live guards; caller must fail closed
+    };
 
-    // Record a request ID for an agent. Returns true if unique (not replayed), false if duplicate/replayed.
-    bool record_request(const std::string& agent_id, const std::string& reqid, const std::string& checksum) {
+    explicit IdempotencyStore(size_t max_entries = 1000, int64_t ttl_seconds = 3600)
+        : max_entries_(max_entries), ttl_seconds_(ttl_seconds) {}
+
+    // Record a request ID for an agent, after the request has been authorized.
+    //
+    // Entries expire by time rather than only by LRU pressure. When the store
+    // is full of entries that have NOT expired, this reports CapacityExceeded
+    // instead of evicting one: silently dropping a guard would let an attacker
+    // reopen a replay window simply by flooding the store with fresh requests.
+    RecordResult record_request(const std::string& agent_id, const std::string& reqid,
+                                const std::string& checksum) {
         std::lock_guard<std::mutex> lock(mutex_);
+        prune_expired();
+
         std::string key = agent_id + ":" + reqid;
         if (seen_requests_.find(key) != seen_requests_.end()) {
-            return false; // Replay detected!
+            return RecordResult::Replay;
         }
-        if (history_.size() >= max_entries_) {
-            std::string oldest = history_.front();
-            history_.pop_front();
-            seen_requests_.erase(oldest);
+        if (seen_requests_.size() >= max_entries_) {
+            return RecordResult::CapacityExceeded;
         }
-        seen_requests_[key] = checksum;
-        history_.push_back(key);
-        return true;
+
+        const int64_t now = get_unix_timestamp();
+        seen_requests_[key] = Entry{checksum, now};
+        history_.push_back(HistoryItem{key, now});
+        return RecordResult::Recorded;
     }
 
     bool is_replayed(const std::string& agent_id, const std::string& reqid) const {
         std::lock_guard<std::mutex> lock(mutex_);
-        std::string key = agent_id + ":" + reqid;
-        return seen_requests_.find(key) != seen_requests_.end();
+        auto it = seen_requests_.find(agent_id + ":" + reqid);
+        if (it == seen_requests_.end()) return false;
+        return !is_expired(it->second.recorded_at);
     }
 
     void clear() {
@@ -393,9 +510,35 @@ public:
     }
 
 private:
+    struct Entry {
+        std::string checksum;
+        int64_t recorded_at;
+    };
+    struct HistoryItem {
+        std::string key;
+        int64_t recorded_at;
+    };
+
+    bool is_expired(int64_t recorded_at) const {
+        return get_unix_timestamp() - recorded_at >= ttl_seconds_;
+    }
+
+    // history_ is chronological, so expired entries are always at the front.
+    void prune_expired() {
+        while (!history_.empty() && is_expired(history_.front().recorded_at)) {
+            auto it = seen_requests_.find(history_.front().key);
+            // Only erase if the map entry is the one this history item recorded.
+            if (it != seen_requests_.end() && it->second.recorded_at == history_.front().recorded_at) {
+                seen_requests_.erase(it);
+            }
+            history_.pop_front();
+        }
+    }
+
     size_t max_entries_;
-    std::unordered_map<std::string, std::string> seen_requests_;
-    std::deque<std::string> history_;
+    int64_t ttl_seconds_;
+    std::unordered_map<std::string, Entry> seen_requests_;
+    std::deque<HistoryItem> history_;
     mutable std::mutex mutex_;
 };
 
@@ -461,14 +604,17 @@ public:
         }
 
         // 1b. Verify payload integrity: CHK header must equal sha256 of the body.
-        std::string computed_chk = "sha256:" + SHA256::hash_hex(ast.raw_body);
+        std::string computed_chk = "sha256:" + SHA256::hash_hex(canonical_for_chk(ast.raw_frame));
         if (ast.header.chk != computed_chk) {
             plan.error_message = "ERR:integrity - checksum mismatch";
             return plan;
         }
 
-        // 1c. Replay protection (if enabled)
-        if (enforce_idempotency_ && !idempotency_store_.record_request(ast.header.agt, ast.header.reqid, ast.header.chk)) {
+        // 1c. Replay protection: reject a REQID that has already been executed.
+        // The REQID is only *recorded* once authorization has fully succeeded
+        // (see the end of this function), so a request that fails the capability
+        // checks does not burn the id for the legitimate retry.
+        if (enforce_idempotency_ && idempotency_store_.is_replayed(ast.header.agt, ast.header.reqid)) {
             plan.error_message = "ERR:replay_detected - Request ID '" + ast.header.reqid + "' has already been executed for agent '" + ast.header.agt + "'";
             return plan;
         }
@@ -549,6 +695,29 @@ public:
                         return plan;
                     }
                 }
+            }
+        }
+
+        // Everything is authorized. Consume the REQID now, not earlier. Doing
+        // this last also closes the race between the is_replayed() check above
+        // and this point: whichever concurrent caller records first wins, and
+        // the loser is rejected here rather than both being authorized.
+        if (enforce_idempotency_) {
+            switch (idempotency_store_.record_request(ast.header.agt, ast.header.reqid, ast.header.chk)) {
+                case IdempotencyStore::RecordResult::Recorded:
+                    break;
+                case IdempotencyStore::RecordResult::Replay:
+                    plan.approved_actions.clear();
+                    plan.error_message = "ERR:replay_detected - Request ID '" + ast.header.reqid +
+                                         "' has already been executed for agent '" + ast.header.agt + "'";
+                    return plan;
+                case IdempotencyStore::RecordResult::CapacityExceeded:
+                    // Fail closed: without a free slot we cannot promise this
+                    // request will not be replayed later.
+                    plan.approved_actions.clear();
+                    plan.error_message = "ERR:replay_detected - idempotency store at capacity; "
+                                         "cannot guarantee exactly-once execution";
+                    return plan;
             }
         }
 
