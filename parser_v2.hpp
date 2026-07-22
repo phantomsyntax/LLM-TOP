@@ -8,6 +8,8 @@
 #include <stdexcept>
 #include <optional>
 #include <iomanip>
+#include <algorithm>
+#include <cctype>
 #include "json_utils.hpp"
 
 // Custom insertion-ordered map to maintain sequence order of protocol keys (tgt, act, etc.)
@@ -250,7 +252,25 @@ public:
             return ast;
         }
 
-        ast.header = parseHeader(ast, line);
+        // A model that puts each header field on its own line has produced
+        // exactly the right information in the wrong shape. Fold leading bare
+        // KEY:VALUE lines into the header line rather than rejecting the frame.
+        // Observed from mistral-large-3, whose output was otherwise field-perfect.
+        // raw_frame is untouched, so CHK still covers the bytes as they arrived.
+        std::string header_line = line;
+        std::istream::pos_type mark = stream.tellg();
+        while (std::getline(stream, line)) {
+            const std::string probe = trim(line);
+            if (!probe.empty()) {
+                if (!is_header_continuation(probe)) break;
+                header_line += " " + probe;
+            }
+            mark = stream.tellg();
+        }
+        stream.clear();
+        stream.seekg(mark);
+
+        ast.header = parseHeader(ast, header_line);
         Statement current_stmt;
         bool has_role = false;
         bool current_stmt_healed = false;
@@ -344,6 +364,28 @@ public:
 private:
     Mode mode_;
     size_t max_size_;
+
+    static bool is_bare_identifier(const std::string& s) {
+        if (s.empty()) return false;
+        for (unsigned char c : s) {
+            if (!(std::isalnum(c) || c == '_')) return false;
+        }
+        return true;
+    }
+
+    // Only a lone, space-free KEY:VALUE token whose key is a known header field
+    // may be folded into the header. Requiring both conditions keeps a statement
+    // KV line like `tgt:src/a.cpp` -- also space-free and colon-bearing -- from
+    // being swallowed, and stops a role or tool line from ever qualifying.
+    static bool is_header_continuation(const std::string& s) {
+        if (s.empty() || s[0] == '[' || s[0] == '!') return false;
+        if (s.find(' ') != std::string::npos) return false;
+        const size_t colon = s.find(':');
+        if (colon == std::string::npos || colon == 0) return false;
+        const std::string key = s.substr(0, colon);
+        return key == "VER" || key == "CHK" || key == "AGT" || key == "UID" ||
+               key == "TIM" || key == "REQID" || key == "FALLBACK" || key == "HR";
+    }
 
     void handleError(AST& ast, const std::string& msg) {
         if (mode_ == Mode::STRICT) {
@@ -464,10 +506,27 @@ private:
     void parseKVPairs(AST& ast, const std::string& line, ordered_map& kvpairs, bool& current_stmt_healed) {
         std::vector<std::string> tokens = lex_split(line, ' ');
         for (const auto& token : tokens) {
-            size_t colon = token.find(':');
-            if (colon != std::string::npos) {
-                std::string key = token.substr(0, colon);
-                std::string val = token.substr(colon + 1);
+            // The grammar already binds keys to values with '=' inside tool
+            // brackets (!read[path=...]), so a model writing `tgt=x` on the
+            // statement line has generalized the more consistent of the two
+            // separators this format uses. Accept whichever comes first: a ':'
+            // inside a trailing cap= value must not outrank a leading '='.
+            const size_t colon = token.find(':');
+            size_t equals = token.find('=');
+            // '=' binds only when what precedes it is a bare identifier. Without
+            // that guard a tool call that has drifted onto the statement line
+            // (`!read[path=src/a.cpp]`) splits into the garbage pair
+            // `!read[path` = `src/a.cpp]`, and the statement then validates
+            // carrying no tool call whatsoever -- strictly worse than rejecting
+            // it, because the frame authorizes nothing while claiming to be well
+            // formed. Observed from mistral-large-3.
+            if (equals != std::string::npos && !is_bare_identifier(token.substr(0, equals))) {
+                equals = std::string::npos;
+            }
+            const size_t sep = std::min(colon, equals);
+            if (sep != std::string::npos) {
+                std::string key = token.substr(0, sep);
+                std::string val = token.substr(sep + 1);
                 val = unquote_and_unescape(val);
                 if (kvpairs.count(key) > 0) {
                     handleError(ast, "Duplicate key detected: " + key);
@@ -475,7 +534,7 @@ private:
                 }
                 kvpairs[key] = val;
             } else {
-                handleError(ast, "Malformed KV pair (missing colon): " + token);
+                handleError(ast, "Malformed KV pair (missing ':' or '='): " + token);
             }
         }
     }

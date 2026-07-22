@@ -247,8 +247,102 @@ void test_ordered_map_reference_survives_growth() {
     std::cout << "[PASS] ordered_map references survive growth\n";
 }
 
+// Six live models were asked for the same two-action frame. Two produced
+// semantically perfect output that the parser rejected on punctuation alone:
+// nemotron used '=' where the statement line wanted ':', and mistral-large-3
+// put every header field on its own line. Both are accepted now. These tests
+// pin the leniency AND its limits -- the limits are the part that can rot.
+void test_equals_accepted_as_kv_separator() {
+    LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+
+    // nemotron-3-super's actual output shape.
+    std::string frame =
+        "VER:LLM-TOPv1 CHK:sha256:0000 AGT:planner UID:user1 TIM:2026-07-22 REQID:probe FALLBACK:json\n"
+        "[CODER] tgt=src/a.cpp act=read GL=read_src_a_cpp\n"
+        "!read[path=src/a.cpp]\n";
+    AST ast = parser.parse(frame);
+    CHECK_EQ(ast.statements.size(), 1u);
+    CHECK_EQ(ast.statements[0].kvpairs["tgt"], "src/a.cpp");
+    CHECK_EQ(ast.statements[0].kvpairs["act"], "read");
+    CHECK_EQ(ast.statements[0].kvpairs["GL"], "read_src_a_cpp");
+
+    // The earliest separator wins. A ':' introducing the value must not lose to
+    // an '=' that appears later inside a capability token -- that would split
+    // the pair in the wrong place and silently change the authorized target.
+    AST ast2 = parser.parse(
+        "VER:LLM-TOPv1 CHK:sha256:0000 AGT:planner UID:user1 TIM:2026-07-22 REQID:r FALLBACK:json\n"
+        "[CODER] tgt:src/a.cpp:cap=jwt.tok.sig act:read\n");
+    CHECK_EQ(ast2.statements.size(), 1u);
+    CHECK_EQ(ast2.statements[0].kvpairs["tgt"], "src/a.cpp:cap=jwt.tok.sig");
+
+    // A token carrying neither separator is still an error.
+    LLMTOPParser tolerant(LLMTOPParser::Mode::TOLERANT);
+    AST ast3 = tolerant.parse(
+        "VER:LLM-TOPv1 CHK:sha256:0000 AGT:planner UID:user1 TIM:2026-07-22 REQID:r FALLBACK:json\n"
+        "[CODER] bareword act:read\n");
+    CHECK(ast3.diagnostic.find("bareword") != std::string::npos);
+
+    // Regression: mistral-large-3 put the tool call on the statement line. The
+    // first cut of the '=' rule split `!read[path=src/a.cpp]` into the pair
+    // `!read[path` = `src/a.cpp]`, so the statement validated with NO tool call
+    // -- a frame that authorizes nothing, reported as well formed. '=' must bind
+    // only after a bare identifier, so this has to be refused outright.
+    bool refused = false;
+    try {
+        parser.parse(
+            "VER:LLM-TOPv1 CHK:sha256:0000 AGT:planner UID:user1 TIM:2026-07-22 REQID:r FALLBACK:json\n"
+            "[CODER] tgt:src/a.cpp act:read GL:read_source_a !read[path=src/a.cpp]\n");
+    } catch (const std::runtime_error&) { refused = true; }
+    CHECK(refused);
+
+    // The same guard must not block a legitimate key that merely sits next to a
+    // capability: here the ':' is the real separator and the '=' is data.
+    AST ast4 = parser.parse(
+        "VER:LLM-TOPv1 CHK:sha256:0000 AGT:planner UID:user1 TIM:2026-07-22 REQID:r FALLBACK:json\n"
+        "[CODER] tgt:src/a.cpp:cap=jwt.tok.sig act=read\n");
+    CHECK_EQ(ast4.statements[0].kvpairs["tgt"], "src/a.cpp:cap=jwt.tok.sig");
+    CHECK_EQ(ast4.statements[0].kvpairs["act"], "read");
+}
+
+void test_multiline_header_is_folded() {
+    LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+
+    // mistral-large-3's actual output shape: one header field per line.
+    std::string frame =
+        "VER:LLM-TOPv1\nCHK:sha256:0000\nAGT:planner\nUID:user1\n"
+        "TIM:2026-07-22\nREQID:probe\nFALLBACK:json\n"
+        "[CODER] tgt:src/a.cpp act:read GL:inspect_source_file\n"
+        "!read[path=src/a.cpp]\n"
+        "[CODER] tgt:src/b.cpp act:edit GL:modify_source_file\n"
+        "!write[path=src/b.cpp]\n";
+    AST ast = parser.parse(frame);
+    CHECK_EQ(ast.header.ver, "LLM-TOPv1");
+    CHECK_EQ(ast.header.agt, "planner");
+    CHECK_EQ(ast.header.reqid, "probe");
+    CHECK_EQ(ast.statements.size(), 2u);
+    CHECK_EQ(ast.statements[0].kvpairs["tgt"], "src/a.cpp");
+    CHECK_EQ(ast.statements[1].tool_calls.size(), 1u);
+
+    // Folding must stop at the first non-header line. A statement KV line is
+    // also space-free and colon-bearing, so only the known-key check keeps
+    // `tgt:` out of the header -- if that check is ever dropped, the statement
+    // silently loses its target instead of failing loudly.
+    AST ast2 = parser.parse(
+        "VER:LLM-TOPv1 CHK:sha256:0000 AGT:planner UID:user1 TIM:2026-07-22 REQID:r FALLBACK:json\n"
+        "[CODER] act:read\n"
+        "tgt:src/a.cpp\n");
+    CHECK_EQ(ast2.statements.size(), 1u);
+    CHECK_EQ(ast2.statements[0].kvpairs["tgt"], "src/a.cpp");
+
+    // The frame is unchanged as far as CHK is concerned: folding is a parse-time
+    // view, not a rewrite, so the digest still covers the bytes that arrived.
+    CHECK_EQ(ast.raw_frame, frame);
+}
+
 int main() {
     std::cout << "Running LLM-TOP Parser Tests v3...\n";
+    test_equals_accepted_as_kv_separator();
+    test_multiline_header_is_folded();
     test_ordered_map_reference_survives_growth();
     test_quoted_strings();
     test_self_healing();

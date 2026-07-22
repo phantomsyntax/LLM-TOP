@@ -789,6 +789,42 @@ void test_chk_covers_identity_header() {
 // supported way to satisfy the integrity gate: evaluate() returned
 // ERR:integrity and the public API offered nothing to fix it. This test asserts
 // the supported flow works, so the gap cannot reopen silently.
+// The parser now accepts '=' as a KV separator, which means `cap=<jwt>` parses
+// as a standalone key/value pair for the first time. That must not become a
+// second way to present a capability: authorization reads the token out of the
+// `tgt` pointer's own value, and a sibling `cap` key is not a pointer.
+void test_sibling_cap_key_does_not_authorize() {
+    auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
+    std::string file_token = validator->create_token("gateway", "src/secret.txt", 9999999999LL);
+
+    // Capability split into its own token instead of riding inside tgt's value.
+    std::string smuggled =
+        "VER:LLM-TOPv1 CHK:sha256:PLACEHOLDER AGT:gateway UID:anon TIM:2026-07-18 REQID:smug1 FALLBACK:json\n"
+        "[CODER] tgt=src/secret.txt cap=" + file_token + " act=read\n";
+
+    LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+    AST ast = parser.parse(stamp_chk(smuggled));
+
+    // It must parse -- that is the new leniency working ...
+    CHECK_EQ(ast.statements.size(), 1u);
+    CHECK_EQ(ast.statements[0].kvpairs["tgt"], "src/secret.txt");
+    CHECK_EQ(ast.statements[0].kvpairs["cap"], file_token);
+
+    // ... and must still be refused, because tgt carries no cap= of its own.
+    LLMTOPMiddleware middleware(validator);
+    auto plan = middleware.evaluate(ast);
+    CHECK(!plan.authorized);
+    CHECK_CONTAINS(plan.error_message, std::string("cap"));
+
+    // The same capability inline in tgt's value is the supported form.
+    std::string proper =
+        "VER:LLM-TOPv1 CHK:sha256:PLACEHOLDER AGT:gateway UID:anon TIM:2026-07-18 REQID:smug2 FALLBACK:json\n"
+        "[CODER] tgt=src/secret.txt:cap=" + file_token + " act=read\n";
+    AST ast2 = parser.parse(stamp_chk(proper));
+    auto plan2 = middleware.evaluate(ast2);
+    CHECK(plan2.authorized);
+}
+
 void test_integrator_can_satisfy_chk_with_public_api() {
     auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
     std::string tool_token = validator->create_token("gateway", "execute:read:*", 9999999999LL);
@@ -863,6 +899,7 @@ void test_integrator_can_satisfy_chk_with_public_api() {
 
 int main() {
     std::cout << "Running LLM-TOP Middleware Tests (Real HMAC-SHA256)...\n";
+    test_sibling_cap_key_does_not_authorize();
     test_integrator_can_satisfy_chk_with_public_api();
     test_chk_covers_identity_header();
     test_reqid_not_burned_by_rejection();
