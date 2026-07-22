@@ -51,7 +51,7 @@ This document serves as the formal specification for the LLM-TOP parser.
 ## Parsing Rules
 1. **Strict Mode**: A parser MUST reject the payload if the header is missing any mandatory fields (VER, CHK, AGT, UID, TIM, REQID).
 2. **Tolerant Mode**: A parser MAY attempt to parse remaining statements if a statement fails to parse, capturing healing warnings in a `diagnostic` buffer.
-3. **Capabilities**:
-   - **In-Band Mode**: Pointers and tool calls carrying `cap=` tokens are cryptographically verified via HMAC-SHA256 or Ed25519 public key signatures.
-   - **Out-of-Band Proxy Mode**: When inline `cap=` tokens are omitted, the host proxy (`LLMTOPMiddleware`) verifies actions against host-managed session capability grants bound to `AGT`.
-4. **Idempotency**: Requests matching a previously executed `(AGT, REQID)` tuple are blocked by `IdempotencyStore` to prevent replay attacks.
+3. **Capabilities & Scopes**:
+   - **In-Band Mode**: Pointers and tool calls carrying `cap=` tokens are cryptographically verified via HMAC-SHA256 or Ed25519 public key signatures. Scope matching supports single-level (`*`) and multi-depth (`**`) glob matching.
+   - **Out-of-Band Proxy Mode**: When inline `cap=` tokens are omitted, the thread-safe host proxy (`LLMTOPMiddleware`) verifies actions against host-managed session capability grants bound to `AGT`.
+4. **Idempotency**: Thread-safe `IdempotencyStore` records `(AGT, REQID)` tuples to block duplicate/replayed requests.

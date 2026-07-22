@@ -7,8 +7,8 @@ LLM-TOP is an ultra-dense, token-optimized protocol layer designed specifically 
 ## Key Features & Production Security
 
 1. **Out-of-Band Host Session Proxy Mode**: Host proxy authorization (`set_out_of_band_proxy(true)`) strips dynamic JWT bearer token strings from LLM generation streams, eliminating credential leakage risk while achieving **-75% output token reductions** on tool calls.
-2. **Idempotency & Replay Protection**: In-memory `IdempotencyStore` with LRU eviction tracks executed `(agent_id, reqid)` tuples, automatically blocking duplicate or replayed requests with `ERR:replay_detected`.
-3. **Path Traversal Scope Blocking**: Scope evaluation normalizes all path segments (`normalize_path_segment`), ensuring traversal attempts like `src/../../../etc/passwd` cannot bypass scope patterns like `src/*`.
+2. **Thread-Safe Idempotency & Replay Protection**: In-memory thread-safe `IdempotencyStore` with LRU eviction tracks executed `(agent_id, reqid)` tuples under mutex locks, automatically blocking duplicate or replayed requests with `ERR:replay_detected`.
+3. **Path Traversal Blocking & Multi-Depth Scope Globbing**: Scope evaluation normalizes all path segments (`normalize_path_segment`), blocking traversal attempts (`src/../../../etc/passwd`) while supporting single-level (`*`) and multi-depth (`**`) recursive directory scopes (`src/**`).
 4. **Asymmetric & Symmetric Cryptographic Auth**: Supports asymmetric **Ed25519 / EdDSA** public key verification and HMAC-SHA256 signature validation with TTL enforcement.
 5. **Deterministic Lexer & Escape-Aware Parsing**: A quote-aware C++ state-machine lexer (`LLMTOPParser`) handles escaped characters (`\"`, `\n`) and isolates nested string payloads safely.
 6. **Structured Recovery & Self-Healing**: In Tolerant Mode, syntax errors are trapped in a `diagnostic` buffer, enabling automatic recovery instruction generation and `FALLBACK:json` emission without halting execution.

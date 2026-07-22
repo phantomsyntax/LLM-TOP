@@ -552,6 +552,15 @@ void test_idempotency_replay_protection() {
     std::cout << "[PASS] test_idempotency_replay_protection\n";
 }
 
+void test_multi_depth_glob_matching() {
+    // Single level glob vs multi-depth glob (**)
+    assert(SimpleJWTValidator::scope_matches("read:src/*", "read:src/main.cpp") == true);
+    assert(SimpleJWTValidator::scope_matches("read:src/**", "read:src/sub/deep/main.cpp") == true);
+    assert(SimpleJWTValidator::scope_matches("read:**", "read:anything/anywhere.cpp") == true);
+    assert(SimpleJWTValidator::scope_matches("read:src/*", "read:other/main.cpp") == false);
+    std::cout << "[PASS] test_multi_depth_glob_matching\n";
+}
+
 int main() {
     std::cout << "Running LLM-TOP Middleware Tests (Real HMAC-SHA256)...\n";
     test_fail_open_default_deny();
@@ -562,6 +571,7 @@ int main() {
     test_path_traversal_prevention();
     test_out_of_band_proxy_mode();
     test_idempotency_replay_protection();
+    test_multi_depth_glob_matching();
     test_base64url_roundtrip();
     test_middleware_valid_auth();
     test_middleware_expired_token();
