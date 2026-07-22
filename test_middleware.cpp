@@ -351,33 +351,101 @@ void test_checksum_integrity() {
     std::cout << "[PASS] test_checksum_integrity\n";
 }
 
-// Fix C: an in-band ttl= that has passed must be rejected even if the JWT itself is valid.
-void test_ttl_enforcement() {
+// S11: the in-band ttl= is no longer enforced, because it was never a security
+// control. It travelled unsigned next to the token, so anyone able to edit the
+// payload could extend or strip it -- and CHK being unkeyed, they could
+// recompute that too. The JWT's signed exp is the sole authority on expiry.
+void test_inband_ttl_is_not_a_control() {
     auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
     LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
-    std::string tool_cap = validator->create_token("planner", "execute:read:*", 9999999999LL);
+    std::string live_cap = validator->create_token("planner", "execute:read:*", 9999999999LL);
+    std::string dead_cap = validator->create_token("planner", "execute:read:*", 1LL);
 
-    // Expired ttl -> reject
+    // A past ttl does not block a token whose signed exp is still valid.
     {
         AST ast = parser.parse(fix_chk(
             "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_ttl1 FALLBACK:json\n"
-            "!read[path=readme_md;cap=" + tool_cap + ";ttl=2000-01-01T00:00:00Z]\n"));
+            "!read[path=readme_md;cap=" + live_cap + ";ttl=2000-01-01T00:00:00Z]\n"));
         LLMTOPMiddleware middleware(validator);
-        auto plan = middleware.evaluate(ast);
-        CHECK(!(plan.authorized));
+        CHECK(middleware.evaluate(ast).authorized);
     }
 
-    // Future ttl -> allow
+    // A future ttl does not rescue a token whose signed exp has passed.
     {
         AST ast = parser.parse(fix_chk(
             "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_ttl2 FALLBACK:json\n"
-            "!read[path=readme_md;cap=" + tool_cap + ";ttl=2999-01-01T00:00:00Z]\n"));
+            "!read[path=readme_md;cap=" + dead_cap + ";ttl=2999-01-01T00:00:00Z]\n"));
         LLMTOPMiddleware middleware(validator);
-        auto plan = middleware.evaluate(ast);
-        CHECK(plan.authorized);
+        CHECK(!middleware.evaluate(ast).authorized);
     }
 
-    std::cout << "[PASS] test_ttl_enforcement\n";
+    std::cout << "[PASS] test_inband_ttl_is_not_a_control\n";
+}
+
+// S9: the plan must hand the host sanitized arguments. Authorizing one string
+// while the host executes a different one is how a normalization check becomes
+// decorative.
+void test_plan_carries_sanitized_arguments() {
+    auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
+    LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+    std::string cap = validator->create_token("planner", "execute:read:src/auth.ts", 9999999999LL);
+
+    AST ast = parser.parse(fix_chk(
+        "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_s9 FALLBACK:json\n"
+        "!read[path=src/./sub/../auth.ts;cap=" + cap + "]\n"));
+    LLMTOPMiddleware middleware(validator);
+    auto plan = middleware.evaluate(ast);
+
+    CHECK(plan.authorized);
+    CHECK_EQ(plan.approved_tools.size(), 1u);
+    CHECK_EQ(plan.approved_tools[0].name, "read");
+    CHECK_EQ(plan.approved_tools[0].resource, "src/auth.ts");
+    // The argument map a host would execute carries the normalized path, not
+    // the raw string the model emitted.
+    CHECK_EQ(plan.approved_tools[0].args.at("path"), "src/auth.ts");
+
+    // A rejected plan carries no approved entries at all.
+    AST denied = parser.parse(fix_chk(
+        "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_s9b FALLBACK:json\n"
+        "!read[path=src/auth.ts]\n"));
+    auto denied_plan = middleware.evaluate(denied);
+    CHECK(!denied_plan.authorized);
+    CHECK_EQ(denied_plan.approved_tools.size(), 0u);
+
+    std::cout << "[PASS] test_plan_carries_sanitized_arguments\n";
+}
+
+// S9: a resource climbing above any grantable root is refused outright.
+// Normalization canonicalizes; it does not confine.
+void test_escaping_paths_are_refused() {
+    auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
+    LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+    // Deliberately the broadest possible grant: even '**' must not reach out.
+    std::string cap = validator->create_token("planner", "**", 9999999999LL);
+
+    AST ast = parser.parse(fix_chk(
+        "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_esc FALLBACK:json\n"
+        "!read[path=../../etc/passwd;cap=" + cap + "]\n"));
+    LLMTOPMiddleware middleware(validator);
+    auto plan = middleware.evaluate(ast);
+
+    CHECK(!plan.authorized);
+    CHECK_CONTAINS(plan.error_message, "outside any grantable root");
+
+    std::cout << "[PASS] test_escaping_paths_are_refused\n";
+}
+
+// P8: finalize() mutates the hash state, so an unguarded second call used to
+// return garbage. It is now idempotent.
+void test_sha256_finalize_is_idempotent() {
+    SHA256 ctx;
+    ctx.update(std::string("abc"));
+    auto first = ctx.finalize();
+    auto second = ctx.finalize();
+    CHECK(first == second);
+    CHECK_EQ(SHA256::to_hex(first), SHA256::hash_hex("abc"));
+
+    std::cout << "[PASS] test_sha256_finalize_is_idempotent\n";
 }
 
 // Fix E: create_token must escape claim values so a crafted sub cannot smuggle a broader scope.
@@ -724,7 +792,10 @@ int main() {
     test_nested_claims_do_not_override();
     test_fail_open_default_deny();
     test_checksum_integrity();
-    test_ttl_enforcement();
+    test_inband_ttl_is_not_a_control();
+    test_plan_carries_sanitized_arguments();
+    test_escaping_paths_are_refused();
+    test_sha256_finalize_is_idempotent();
     test_create_token_no_json_injection();
     test_tool_arg_binding();
     test_path_traversal_prevention();

@@ -16,6 +16,8 @@
 #include <mutex>
 #include <functional>
 #include <cctype>
+#include <atomic>
+#include <utility>
 
 // JWT validator for capability tokens.
 //
@@ -545,9 +547,32 @@ private:
 
 class LLMTOPMiddleware {
 public:
+    // A pointer field (e.g. tgt) that was authorized, with its resource path
+    // already normalized.
+    struct ApprovedPointer {
+        std::string key;        // the statement key, e.g. "tgt"
+        std::string resource;   // normalized path that was actually authorized
+    };
+
+    // A tool call that was authorized. `args` carries the resource argument
+    // rewritten to its normalized form, so a host executing this plan cannot
+    // accidentally act on the raw, un-normalized string the model emitted.
+    struct ApprovedTool {
+        std::string name;
+        ordered_map args;
+        std::string resource;   // normalized; empty when the call takes no resource
+        std::optional<std::string> method;
+    };
+
     struct ExecutionPlan {
         bool authorized = false;
+        // Human-readable trail, kept for logging.
         std::vector<std::string> approved_actions;
+        // Machine-consumable decisions. A host should execute THESE, not
+        // re-derive paths from the AST: what was authorized and what gets
+        // executed must be the same string.
+        std::vector<ApprovedPointer> approved_pointers;
+        std::vector<ApprovedTool> approved_tools;
         std::string error_message;
     };
 
@@ -630,13 +655,16 @@ public:
                 for (const auto& kv : stmt.kvpairs) {
                     if (!is_pointer_key(kv.first)) continue;
 
-                    std::string resource = extract_resource_path(kv.second);
+                    std::string resource =
+                        SimpleJWTValidator::normalize_path_segment(extract_resource_path(kv.second));
+                    if (escapes_root(resource)) {
+                        plan.error_message = "ERR:cap_required - pointer field '" + kv.first +
+                                             "' resolves outside any grantable root: " + resource;
+                        return plan;
+                    }
                     if (kv.second.find("cap=") != std::string::npos) {
-                        // In-band JWT token present
-                        if (!ttl_valid(extract_ttl(kv.second))) {
-                            plan.error_message = "ERR:cap_invalid_or_expired - ttl for target: " + kv.first;
-                            return plan;
-                        }
+                        // In-band JWT token present. Any `ttl=` alongside it is
+                        // ignored; the token's signed `exp` governs expiry.
                         std::string cap_token = extract_capability_token(kv.second);
 
                         if (!validate_capability(cap_token, resource, ast.header.agt)) {
@@ -644,6 +672,7 @@ public:
                             return plan;
                         }
                         plan.approved_actions.push_back("READ/WRITE authorized for " + resource);
+                        plan.approved_pointers.push_back(ApprovedPointer{kv.first, resource});
                     } else if (out_of_band_proxy_mode_) {
                         // Out-of-band proxy mode: check host session capability grant
                         if (!validate_proxy_capability(ast.header.agt, "read:" + resource) &&
@@ -654,6 +683,7 @@ public:
                             return plan;
                         }
                         plan.approved_actions.push_back("READ/WRITE authorized (out-of-band proxy) for " + resource);
+                        plan.approved_pointers.push_back(ApprovedPointer{kv.first, resource});
                     } else {
                         plan.error_message = "ERR:cap_required - pointer field '" + kv.first +
                                              "' has no capability token";
@@ -664,17 +694,31 @@ public:
                 // 3. Default-deny: every tool call MUST carry a valid capability (or host proxy grant).
                 for (const auto& tool : stmt.tool_calls) {
                     std::string scope = "execute:" + tool.name;
-                    std::string resource = tool_resource(tool.args);
+                    auto [resource_key, raw_resource] = tool_resource(tool.args);
+                    std::string resource =
+                        SimpleJWTValidator::normalize_path_segment(raw_resource);
+                    if (escapes_root(resource)) {
+                        plan.error_message = "ERR:exec - tool call '" + tool.name +
+                                             "' resolves outside any grantable root: " + resource;
+                        return plan;
+                    }
                     if (!resource.empty()) scope += ":" + resource;
+
+                    // Built here, recorded only on an authorized branch below.
+                    // The normalized resource is written back into the argument
+                    // map so what the host executes is exactly what was
+                    // authorized, not the raw string the model emitted.
+                    ApprovedTool approved;
+                    approved.name = tool.name;
+                    approved.args = tool.args;
+                    approved.resource = resource;
+                    approved.method = tool.method;
+                    if (!resource_key.empty()) approved.args[resource_key] = resource;
 
                     auto cap_it = tool.args.find("cap");
                     if (cap_it != tool.args.end()) {
-                        // In-band JWT token present
-                        auto ttl_it = tool.args.find("ttl");
-                        if (!ttl_valid(ttl_it != tool.args.end() ? ttl_it->second : std::string(""))) {
-                            plan.error_message = "ERR:exec - capability ttl expired for tool call: " + tool.name;
-                            return plan;
-                        }
+                        // In-band JWT token present. Any `ttl=` argument is
+                        // ignored; the token's signed `exp` governs expiry.
                         std::string cap_token = cap_it->second;
 
                         if (!validate_capability(cap_token, scope, ast.header.agt)) {
@@ -682,6 +726,7 @@ public:
                             return plan;
                         }
                         plan.approved_actions.push_back("TOOL authorized: " + tool.name);
+                        plan.approved_tools.push_back(approved);
                     } else if (out_of_band_proxy_mode_) {
                         // Out-of-band proxy mode: check host session capability grant
                         if (!validate_proxy_capability(ast.header.agt, scope)) {
@@ -690,6 +735,7 @@ public:
                             return plan;
                         }
                         plan.approved_actions.push_back("TOOL authorized (out-of-band proxy): " + tool.name);
+                        plan.approved_tools.push_back(approved);
                     } else {
                         plan.error_message = "ERR:exec - missing capability for tool call: " + tool.name;
                         return plan;
@@ -728,8 +774,10 @@ public:
 private:
     std::shared_ptr<SimpleJWTValidator> jwt_validator_;
     bool allow_delegation_;
-    bool out_of_band_proxy_mode_ = false;
-    bool enforce_idempotency_ = false;
+    // Atomic because evaluate() reads these while another thread may be
+    // reconfiguring the middleware; the class advertises thread safety.
+    std::atomic<bool> out_of_band_proxy_mode_{false};
+    std::atomic<bool> enforce_idempotency_{false};
     IdempotencyStore idempotency_store_;
     std::unordered_map<std::string, std::vector<std::string>> session_granted_scopes_;
     mutable std::mutex session_mutex_;
@@ -753,34 +801,33 @@ private:
     }
 
     // The resource a tool call operates on: first present of these argument names.
-    // Bound into the capability scope so a token cannot be reused on a different target.
-    static std::string tool_resource(const ordered_map& args) {
+    // Bound into the capability scope so a token cannot be reused on a different
+    // target. Returns the argument name as well so the caller can rewrite that
+    // argument to the normalized path in the approved plan.
+    static std::pair<std::string, std::string> tool_resource(const ordered_map& args) {
         for (const std::string& k : {std::string("path"), std::string("target"),
                                      std::string("file"), std::string("resource")}) {
             auto it = args.find(k);
-            if (it != args.end()) return it->second;
+            if (it != args.end()) return {k, it->second};
         }
-        return "";
+        return {"", ""};
     }
 
-    // An in-band ttl (if present) must be a future ISO-8601 UTC instant.
-    // Empty ttl means "not specified" (the JWT exp still governs expiry).
-    static bool ttl_valid(const std::string& ttl_value) {
-        if (ttl_value.empty()) return true;
-        auto exp = parse_iso8601_to_epoch(ttl_value);
-        if (!exp.has_value()) return false; // malformed ttl is treated as invalid
-        return get_unix_timestamp() <= *exp;
+    // A resource that normalizes to a path climbing above its own root escapes
+    // whatever subtree a grant could describe, so it is refused outright rather
+    // than left for scope matching to catch. Normalization alone canonicalizes;
+    // it does not confine.
+    static bool escapes_root(const std::string& normalized) {
+        return normalized == ".." || normalized.rfind("../", 0) == 0;
     }
 
-    // Extract the ttl= value from a pointer string (up to the next ';' or end).
-    std::string extract_ttl(const std::string& pointer_str) {
-        size_t pos = pointer_str.find("ttl=");
-        if (pos == std::string::npos) return "";
-        size_t start = pos + 4;
-        size_t end = pointer_str.find(';', start);
-        if (end == std::string::npos) end = pointer_str.length();
-        return pointer_str.substr(start, end - start);
-    }
+    // NOTE: the in-band `ttl=` field is deliberately NOT enforced.
+    //
+    // It travelled unsigned alongside the token, so anyone able to modify the
+    // payload could extend or strip it at will -- and since CHK is unkeyed they
+    // could recompute that too. Enforcing a value an attacker fully controls
+    // provides no security while costing tokens on every pointer and tool call.
+    // The JWT's signed `exp` claim is the sole authority on expiry.
 
     bool validate_capability(const std::string& cap_token, const std::string& resource, const std::string& agent_id) {
         auto claim = jwt_validator_->verify(cap_token, resource);

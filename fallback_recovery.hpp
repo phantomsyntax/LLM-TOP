@@ -7,6 +7,8 @@
 #include <vector>
 #include <sstream>
 #include <ctime>
+#include <cctype>
+#include <algorithm>
 
 // Fallback Recovery System for LLM-TOP
 // When a payload is corrupted or malformed, this system:
@@ -84,8 +86,13 @@ public:
                                              const std::string& original_payload) {
         std::ostringstream oss;
 
+        // The recovery frame is a space-delimited LLM-TOP header, not JSON, so
+        // escape_json() does not protect it: a reqid containing a space would
+        // inject additional header fields (e.g. "x AGT:admin"). Restrict the
+        // value to a header-safe token instead.
         oss << "VER:LLM-TOPv1 CHK:sha256:recovery AGT:evaluator UID:system TIM:"
-            << get_iso_timestamp() << " REQID:" << escape_json(ast.header.reqid) << "_recovery FALLBACK:json\n";
+            << get_iso_timestamp() << " REQID:" << sanitize_header_token(ast.header.reqid)
+            << "_recovery FALLBACK:json\n";
 
         oss << "[PLANNER] act:repair GL:fix_and_resubmit TD:correct_syntax,validate_format\n";
         oss << "ERROR_COUNT:" << plan.errors_found << " ";
@@ -216,9 +223,31 @@ public:
     }
 
 private:
-    // Simple hash for audit trail
+    // Reduce an untrusted value to something safe to embed in a space-delimited
+    // protocol header: no spaces, newlines, or delimiters that could start a new
+    // field. Length-capped so a huge reqid cannot bloat the recovery frame.
+    static std::string sanitize_header_token(const std::string& s) {
+        static constexpr size_t kMaxLen = 64;
+        std::string out;
+        out.reserve(std::min(s.size(), kMaxLen));
+        for (char c : s) {
+            if (out.size() >= kMaxLen) break;
+            unsigned char uc = static_cast<unsigned char>(c);
+            if (std::isalnum(uc) || c == '-' || c == '_' || c == '.') {
+                out += c;
+            } else {
+                out += '_';
+            }
+        }
+        if (out.empty()) out = "unknown";
+        return out;
+    }
+
+    // Non-cryptographic digest used only to correlate log lines. This is the
+    // djb2 variant, which seeds at 5381; it was previously seeded at 0 while
+    // still being labelled djb2.
     std::string compute_simple_hash(const std::string& data) {
-        uint32_t hash = 0;
+        uint32_t hash = 5381;
         for (char c : data) {
             hash = ((hash << 5) + hash) + static_cast<uint8_t>(c);
         }

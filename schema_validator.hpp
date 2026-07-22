@@ -35,6 +35,17 @@ public:
         init_schemas();
     }
 
+    // Whether a pointer field lacking an in-band `cap=` is an error.
+    //
+    // Off by default, because out-of-band proxy mode -- the recommended
+    // architecture -- deliberately carries no inline capability tokens; there
+    // the host's session grants are the authority and a missing cap= is normal.
+    // Turn it on for deployments that require in-band capabilities, where a
+    // pointer without one is a malformed request rather than a style choice.
+    void set_require_inband_capabilities(bool require) {
+        require_inband_capabilities_ = require;
+    }
+
     // Validate an entire AST against expected schema
     struct ValidationResult {
         bool valid = false;
@@ -50,11 +61,17 @@ public:
             return result;
         }
 
-        // 2. Validate each statement
+        // 2. Validate each statement. The return value is deliberately ignored:
+        // every statement is checked so one payload yields every error at once.
         for (size_t i = 0; i < ast.statements.size(); ++i) {
-            if (!validate_statement(ast.statements[i], i, result)) {
-                // Continue validating other statements for comprehensive error reporting
-            }
+            validate_statement(ast.statements[i], i, result);
+        }
+
+        // 3. Self-healed statements are held separately and the middleware
+        // rejects them unless the host opts in. Validate them too, so a host
+        // that does opt in is not accepting unvalidated statements.
+        for (size_t i = 0; i < ast.healed_draft.size(); ++i) {
+            validate_statement(ast.healed_draft[i], i, result, /*healed=*/true);
         }
 
         // If no errors, mark as valid
@@ -64,6 +81,7 @@ public:
 
 private:
     std::unordered_map<std::string, StatementSchema> schemas_;
+    bool require_inband_capabilities_ = false;
 
     void init_schemas() {
         // EXEC schema: execution and tool invocation
@@ -147,16 +165,18 @@ private:
         return true;
     }
 
-    bool validate_statement(const Statement& stmt, size_t stmt_index, ValidationResult& result) {
+    bool validate_statement(const Statement& stmt, size_t stmt_index, ValidationResult& result,
+                            bool healed = false) {
+        const std::string label = healed ? "HEALED[" : "STMT[";
         if (stmt.role.empty()) {
-            result.errors.push_back("STMT[" + std::to_string(stmt_index) + "]: Missing role");
+            result.errors.push_back(label + std::to_string(stmt_index) + "]: Missing role");
             return false;
         }
 
         // Look up schema for this role
         auto schema_it = schemas_.find(stmt.role);
         if (schema_it == schemas_.end()) {
-            result.warnings.push_back("STMT[" + std::to_string(stmt_index) + "]: Unknown role '" + stmt.role + "' (not in schema)");
+            result.warnings.push_back(label + std::to_string(stmt_index) + "]: Unknown role '" + stmt.role + "' (not in schema)");
             // Don't fail on unknown roles - allow extensibility
             return true;
         }
@@ -167,16 +187,21 @@ private:
         for (const auto& req_field : schema.required_fields) {
             auto kv_it = stmt.kvpairs.find(req_field.name);
             if (kv_it == stmt.kvpairs.end()) {
-                result.errors.push_back("STMT[" + std::to_string(stmt_index) + "][" + stmt.role + 
+                result.errors.push_back(label + std::to_string(stmt_index) + "][" + stmt.role +
                                        "]: Missing required field '" + req_field.name + "'");
                 return false;
             }
 
-            // If field requires capability, check for cap= and ttl=
-            if (req_field.is_pointer) {
-                if (kv_it->second.find("cap=") == std::string::npos) {
-                    result.warnings.push_back("STMT[" + std::to_string(stmt_index) + "][" + stmt.role + 
-                                             "]: Pointer field '" + req_field.name + "' missing capability token");
+            // A pointer field references a protected resource. Whether a missing
+            // in-band cap= is fatal depends on the deployment's auth mode.
+            if (req_field.is_pointer && kv_it->second.find("cap=") == std::string::npos) {
+                const std::string msg = label + std::to_string(stmt_index) + "][" + stmt.role +
+                                        "]: Pointer field '" + req_field.name +
+                                        "' missing capability token";
+                if (require_inband_capabilities_) {
+                    result.errors.push_back(msg);
+                } else {
+                    result.warnings.push_back(msg);
                 }
             }
         }
@@ -195,8 +220,11 @@ private:
                     }
                 }
                 if (!tool_allowed) {
-                    result.warnings.push_back("STMT[" + std::to_string(stmt_index) + "][" + stmt.role + 
-                                             "]: Tool '" + tool.name + "' not in allowed list for this role");
+                    // A role's allowed-tool list is a constraint, not advice.
+                    // Reporting it as a warning left `valid` true, so the
+                    // restriction was never actually enforced by anything.
+                    result.errors.push_back(label + std::to_string(stmt_index) + "][" + stmt.role +
+                                            "]: Tool '" + tool.name + "' not in allowed list for this role");
                 }
             }
         }
