@@ -171,10 +171,22 @@ struct AST {
 // Note this is an UNKEYED digest: it detects truncation and corruption, not a
 // deliberate attacker, who can simply recompute it. Authentication comes from
 // capabilities, not from CHK.
+//
+// The marker search is ANCHORED to line 1. Unanchored, a frame with no header
+// CHK but the literal "CHK:sha256:" somewhere in a body statement had its blind
+// spot relocated into the body: the bytes from that marker to the next
+// whitespace were excluded from the digest on both the stamp and the verify
+// side, so they could be altered in transit undetected. Reachability was
+// narrow -- LLMTOPMiddleware rejects such a frame either way (STRICT throws on
+// the empty CHK, TOLERANT fails the `header.chk != computed_chk` compare) --
+// but the standalone stamp_chk/compute_chk pair across a process hop has no
+// such backstop, and that is the one use chk.hpp actually endorses.
 inline std::string canonical_for_chk(const std::string& frame) {
     const std::string marker = "CHK:sha256:";
+    size_t line_end = frame.find('\n');
     size_t p = frame.find(marker);
     if (p == std::string::npos) return frame;
+    if (line_end != std::string::npos && p > line_end) return frame;
     size_t start = p + marker.size();
     size_t end = frame.find_first_of(" \r\n", start);
     if (end == std::string::npos) end = frame.size();
@@ -257,7 +269,16 @@ public:
         // KEY:VALUE lines into the header line rather than rejecting the frame.
         // Observed from mistral-large-3, whose output was otherwise field-perfect.
         // raw_frame is untouched, so CHK still covers the bytes as they arrived.
-        std::string header_line = line;
+        //
+        // trim() here, not just `= line`: getline splits on '\n' and leaves the
+        // '\r' of a CRLF payload on the end of line 1. Body lines are trimmed
+        // below and continuation lines are trimmed as `probe`, so line 1 was the
+        // one place the carriage return survived into a field value. Whichever
+        // header field comes last then carried it -- and since FALLBACK and HR
+        // are both optional (Grammar.md), the minimal conformant header ends at
+        // REQID, which keys replay protection. "req1\r" and "req1" are distinct
+        // idempotency keys, so the same frame sent CRLF and LF replayed cleanly.
+        std::string header_line = trim(line);
         std::istream::pos_type mark = stream.tellg();
         while (std::getline(stream, line)) {
             const std::string probe = trim(line);

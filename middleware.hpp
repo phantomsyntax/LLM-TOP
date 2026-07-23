@@ -497,21 +497,83 @@ private:
         return "";
     }
 
+public:
     // Extract a top-level string claim, unescaping the JSON string body.
+    //
+    // Public alongside scope_matches()/normalize_path_segment() -- the other
+    // pure static helpers the test suite exercises directly, where routing
+    // through a signed token would only re-test create_token()'s escaping.
+    //
+    // This used to drop the backslash and keep the following character verbatim,
+    // so "\n" decoded to 'n' and "A" to "u0041". Any issuer whose JSON
+    // encoder emits escapes -- \u is what most emit for non-ASCII -- produced a
+    // claim string this validator disagreed with about its own contents, and a
+    // scope compared byte-for-byte then failed to match. Not an attack path (the
+    // claims sit inside an HMAC-verified token, so reaching this requires the
+    // signing key) but a real interop defect. parser_v2.hpp's
+    // unquote_and_unescape() has translated these all along; this is the JWT
+    // side catching up, plus the \u handling neither had.
     static std::string extract_string_claim(const std::string& json, const std::string& key) {
         std::string raw = top_level_raw(json, key);
         if (raw.size() < 2 || raw.front() != '"' || raw.back() != '"') return "";
         std::string val;
-        bool esc = false;
         for (size_t i = 1; i + 1 < raw.size(); ++i) {
             char c = raw[i];
-            if (esc)            { val += c; esc = false; }
-            else if (c == '\\') { esc = true; }
-            else                { val += c; }
+            if (c != '\\') { val += c; continue; }
+            if (i + 1 >= raw.size() - 1) break;   // trailing backslash: drop it
+            char next = raw[++i];
+            switch (next) {
+                case 'n': val += '\n'; break;
+                case 't': val += '\t'; break;
+                case 'r': val += '\r'; break;
+                case 'b': val += '\b'; break;
+                case 'f': val += '\f'; break;
+                case '/': val += '/';  break;
+                case '"': val += '"';  break;
+                case '\\': val += '\\'; break;
+                case 'u': {
+                    // \uXXXX -> UTF-8. Surrogate pairs are not reassembled; a
+                    // lone or paired surrogate is emitted as U+FFFD rather than
+                    // as invalid UTF-8, which is what a scope comparison can at
+                    // least fail predictably against.
+                    if (i + 4 >= raw.size() - 1) { val += "\\u"; break; }
+                    uint32_t cp = 0;
+                    bool ok = true;
+                    for (int k = 1; k <= 4; ++k) {
+                        char h = raw[i + k];
+                        cp <<= 4;
+                        if      (h >= '0' && h <= '9') cp |= static_cast<uint32_t>(h - '0');
+                        else if (h >= 'a' && h <= 'f') cp |= static_cast<uint32_t>(h - 'a' + 10);
+                        else if (h >= 'A' && h <= 'F') cp |= static_cast<uint32_t>(h - 'A' + 10);
+                        else { ok = false; break; }
+                    }
+                    if (!ok) { val += "\\u"; break; }
+                    i += 4;
+                    if (cp >= 0xD800 && cp <= 0xDFFF) cp = 0xFFFD;
+                    if (cp < 0x80) {
+                        val += static_cast<char>(cp);
+                    } else if (cp < 0x800) {
+                        val += static_cast<char>(0xC0 | (cp >> 6));
+                        val += static_cast<char>(0x80 | (cp & 0x3F));
+                    } else {
+                        val += static_cast<char>(0xE0 | (cp >> 12));
+                        val += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+                        val += static_cast<char>(0x80 | (cp & 0x3F));
+                    }
+                    break;
+                }
+                default:
+                    // Not a JSON escape. Keep both bytes rather than inventing a
+                    // translation, matching unquote_and_unescape()'s default arm.
+                    val += '\\';
+                    val += next;
+                    break;
+            }
         }
         return val;
     }
 
+private:
     // Extract a top-level integer claim.
     static int64_t extract_int_claim(const std::string& json, const std::string& key) {
         std::string raw = top_level_raw(json, key);
@@ -906,8 +968,32 @@ private:
     // whatever subtree a grant could describe, so it is refused outright rather
     // than left for scope matching to catch. Normalization alone canonicalizes;
     // it does not confine.
+    //
+    // An ABSOLUTE path escapes just as surely as "../" does, and did not used to
+    // be caught: "/etc/passwd" is neither ".." nor "../"-prefixed, so it fell
+    // through to scope matching. For any relative grant that was still refused
+    // (path_glob_matches_segs rejects on p_abs != t_abs), but scope_matches
+    // short-circuits `**` before any path comparison runs -- so a "**" grant,
+    // the exact case test_escaping_paths_are_refused calls "the broadest
+    // possible grant: even '**' must not reach out", reached the host filesystem.
+    //
+    // Tradeoff: this also makes an absolute GRANT ("read:/srv/data/**")
+    // unreachable, since no absolute resource now survives to be matched
+    // against it. Nothing in this repository grants one, and README's
+    // confinement claim -- refusal "independent of what the granted scope says"
+    // -- is only true with the check here. A host that genuinely needs absolute
+    // roots wants confinement against a configured root, not this predicate.
     static bool escapes_root(const std::string& normalized) {
-        return normalized == ".." || normalized.rfind("../", 0) == 0;
+        if (normalized == ".." || normalized.rfind("../", 0) == 0) return true;
+        if (!normalized.empty() && normalized[0] == '/') return true;
+        // normalize_path_segment() folds '\' to '/', so a drive-qualified path
+        // arrives as "C:/Windows/..." or bare "C:" -- both are absolute.
+        if (normalized.size() >= 2 && normalized[1] == ':' &&
+            ((normalized[0] >= 'A' && normalized[0] <= 'Z') ||
+             (normalized[0] >= 'a' && normalized[0] <= 'z'))) {
+            return true;
+        }
+        return false;
     }
 
     // NOTE: the in-band `ttl=` field is deliberately NOT enforced.

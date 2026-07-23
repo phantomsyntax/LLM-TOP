@@ -43,8 +43,13 @@ inline std::string compute_chk(const std::string& frame) {
 // CHK will be rejected by a verifying middleware, which is the correct outcome.
 inline std::string stamp_chk(std::string frame) {
     const std::string marker = "CHK:sha256:";
+    size_t line_end = frame.find('\n');
     size_t p = frame.find(marker);
     if (p == std::string::npos) return frame;
+    // Anchored to line 1, matching canonical_for_chk(). A marker in the body is
+    // not a header field, and stamping it wrote a digest into a body statement
+    // while leaving the frame with no header CHK at all.
+    if (line_end != std::string::npos && p > line_end) return frame;
 
     size_t start = p + marker.size();
     size_t end = frame.find_first_of(" \r\n", start);

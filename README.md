@@ -4,11 +4,15 @@ LLM-TOP is a dense, token-optimized protocol layer for multi-agent LLM orchestra
 conversational framing with strict key-value markers and moves capability tokens out of the
 generation stream, so an agent's output carries instructions rather than credentials.
 
-Measured with a real `cl100k_base` (tiktoken) tokenizer, LLM-TOP costs **~73% fewer tokens than the
-OpenAI `tool_calls` envelope on output tool-call turns**, and **~22–54% fewer than JSON
-transcriptions of the same frame**, depending on how the JSON is formatted. Both figures are
-reproducible from `benchmarker_real.cpp` in this repository — see
-[Measurement](#empirical-measurements) for what each one does and does not claim.
+Measured with a real `cl100k_base` (tiktoken) tokenizer, LLM-TOP costs **~22–54% fewer tokens than
+JSON transcriptions of the same frame**, depending on how the JSON is formatted — reproducible from
+`benchmarker_real.cpp` in this repository, and corroborated by live provider billing at 17–24%
+against minified JSON.
+
+**Against native `tools` API calling this project makes no general claim.** The result depends on
+the provider rather than the format: paired live runs put LLM-TOP anywhere from −111% to +33% for
+identical work. See [Measurement](#empirical-measurements) for what each figure does and does not
+claim.
 
 ---
 
@@ -23,8 +27,11 @@ reproducible from `benchmarker_real.cpp` in this repository — see
    Entries expire on a TTL, and a saturated store **fails closed** rather than evicting live
    entries — a flood cannot age out a legitimate request to make room for a replay.
 3. **Path Confinement & Scope Globbing**: Scope evaluation normalizes path segments and refuses
-   any resource that escapes the working root, independent of what the granted scope says.
-   Supports single-level (`*`) and multi-depth (`**`) directory scopes.
+   any resource that escapes the working root — both `../` climbs and absolute paths (POSIX or
+   drive-qualified) — independent of what the granted scope says, including `**`. Supports
+   single-level (`*`) and multi-depth (`**`) directory scopes. Consequently grants are relative
+   only: an absolute scope such as `read:/srv/data/**` can never match, because no absolute
+   resource survives confinement to be tested against it.
 4. **HMAC-SHA256 Capability Tokens, with a Verifier Registry**: Ships HMAC-SHA256 only. The
    algorithm named in the JWT header binds to a registered verifier, so `alg` cannot select a
    weaker path. A host needing asymmetric verification registers its own verifier backed by its own
@@ -116,8 +123,12 @@ convention throughout: **positive means LLM-TOP used fewer tokens.**
 
 ### 1. Output tool-call turns vs the OpenAI `tool_calls` envelope
 
-This is the comparison against a format models actually emit, where the JSON alternative nests a
-JSON-escaped `arguments` string inside a `tool_calls` object.
+> **Retracted as a headline claim.** This table counts a locally-constructed `tool_calls` envelope
+> with `cl100k_base`. It does not measure what a provider bills for native tool calling, and when
+> that was measured live the sign was not even stable across vendors. The numbers below are
+> reproducible and are kept for what they are — a syntax comparison against a hand-built envelope —
+> but no "~73% cheaper than tool calling" conclusion follows from them, and the previous revision of
+> this README asserted one.
 
 | Case | LLM-TOP | OpenAI `tool_calls` | Reduction |
 | :--- | :---: | :---: | :---: |
@@ -125,6 +136,21 @@ JSON-escaped `arguments` string inside a `tool_calls` object.
 | Two arguments | 12 | 45 | 73.3% |
 | Three calls in one turn | 28 | 102 | 72.5% |
 | **Median** | | | **73.3%** (range 72.5%–81.0%) |
+
+What live provider billing says instead, paired over the same tasks:
+
+| actions/frame | `minimax-m3` | `glm-5.2` |
+| :--- | :---: | :---: |
+| 1 | −32.1% | −111% |
+| 2 | +3.1% | −50.7% |
+| 4 | +22.0% | −20.1% |
+| 8 | +32.9% | −4.0% |
+
+The amortization mechanism is real and reproducible on both models — LLM-TOP spreads a 41-token
+header across statements (83 → 37 tokens/action) while the native envelope is per-call and stays
+flat. But whether amortization ever *catches up* depends on how the vendor bills that envelope, and
+that varies by 58–75% between vendors for identical work. On `minimax-m3` LLM-TOP overtakes at ~3
+actions; on `glm-5.2` it never does. Single-action turns are the format's worst case on both.
 
 ### 2. Full context frames vs JSON/YAML transcriptions
 
@@ -137,8 +163,9 @@ JSON-escaped `arguments` string inside a `tool_calls` object.
 
 > **Baseline provenance.** These four baselines are the LLM-TOP frame re-encoded — they measure
 > LLM-TOP's own AST shape expressed as JSON or YAML, not a format any API speaks. They answer
-> "how much does the syntax cost?", not "how much would I save by switching?". Table 1 answers the
-> second question.
+> "how much does the syntax cost?", not "how much would I save by switching?". Table 1 does **not**
+> answer the second question either, despite previously claiming to; only the live billing figures
+> under it do, and their answer is "it depends on your provider".
 
 ### 3. Auth mode and format, separated
 

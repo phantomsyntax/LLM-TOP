@@ -432,7 +432,170 @@ void test_escaping_paths_are_refused() {
     CHECK(!plan.authorized);
     CHECK_CONTAINS(plan.error_message, "outside any grantable root");
 
+    // An ABSOLUTE path escapes the same root and was NOT refused: it is neither
+    // ".." nor "../"-prefixed, and scope_matches short-circuits "**" before any
+    // path comparison could reject it. The claim above -- "even '**' must not
+    // reach out" -- held only against the relative spelling of the attack.
+    {
+        AST abs_ast = parser.parse(stamp_chk(
+            "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_esc2 FALLBACK:json\n"
+            "!read[path=/etc/passwd;cap=" + cap + "]\n"));
+        auto abs_plan = middleware.evaluate(abs_ast);
+        CHECK(!abs_plan.authorized);
+        CHECK_CONTAINS(abs_plan.error_message, "outside any grantable root");
+    }
+
+    // Windows drive-qualified, in both slash spellings. normalize_path_segment()
+    // folds '\' to '/', so the backslash form arrives as "C:/Windows/...".
+    {
+        AST win_ast = parser.parse(stamp_chk(
+            "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_esc3 FALLBACK:json\n"
+            "!read[path=C:/Windows/System32/config/SAM;cap=" + cap + "]\n"));
+        auto win_plan = middleware.evaluate(win_ast);
+        CHECK(!win_plan.authorized);
+        CHECK_CONTAINS(win_plan.error_message, "outside any grantable root");
+    }
+
+    // ...and via a pointer field, which runs the same predicate on a separate
+    // code path from the tool-call branch.
+    {
+        AST ptr_ast = parser.parse(stamp_chk(
+            "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_esc4 FALLBACK:json\n"
+            "[CODER] tgt:/etc/shadow:cap=" + cap + " act:read GL:exfil\n"));
+        auto ptr_plan = middleware.evaluate(ptr_ast);
+        CHECK(!ptr_plan.authorized);
+        CHECK_CONTAINS(ptr_plan.error_message, "outside any grantable root");
+    }
+
+    // A relative path under the root still works, so the check refuses escapes
+    // rather than everything.
+    {
+        AST ok_ast = parser.parse(stamp_chk(
+            "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_esc5 FALLBACK:json\n"
+            "!read[path=src/main.cpp;cap=" + cap + "]\n"));
+        auto ok_plan = middleware.evaluate(ok_ast);
+        CHECK(ok_plan.authorized);
+    }
+
     std::cout << "[PASS] test_escaping_paths_are_refused\n";
+}
+
+// The CRLF header line. getline() splits on '\n' and leaves '\r' on line 1;
+// FALLBACK and HR are both optional per Grammar.md, so a minimal conformant
+// header ends at REQID -- which keys replay protection. Untrimmed, the same
+// logical request sent CRLF and LF produced two different idempotency keys.
+void test_crlf_header_does_not_leak_carriage_return() {
+    auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
+    LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+
+    // Minimal conformant header: no FALLBACK, no HR, so REQID is last.
+    AST crlf = parser.parse(
+        "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_crlf\r\n"
+        "[CODER] act:read GL:analyze\r\n");
+    CHECK(crlf.header.reqid == "req_crlf");
+    CHECK(crlf.header.reqid.find('\r') == std::string::npos);
+
+    // Same with FALLBACK trailing, which is where the '\r' landed before.
+    AST crlf_fb = parser.parse(
+        "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_crlf2 FALLBACK:json\r\n"
+        "[CODER] act:read GL:analyze\r\n");
+    CHECK(crlf_fb.header.fallback == "json");
+    CHECK(crlf_fb.header.ver == "LLM-TOPv1");
+
+    // The consequence that mattered: CRLF and LF spellings of one request must
+    // collide in the idempotency store, not slip past each other.
+    const std::string body = "[CODER] act:read GL:analyze\n";
+    const std::string hdr =
+        "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_dup";
+
+    LLMTOPMiddleware middleware(validator);
+    middleware.set_verify_chk(false);           // hand-built frames; CHK is not under test here
+    middleware.set_enforce_idempotency(true);   // off by default; this test is about the reqid key
+
+    AST lf_ast = parser.parse(hdr + "\n" + body);
+    auto first = middleware.evaluate(lf_ast);
+    CHECK(first.authorized);
+
+    AST crlf_ast = parser.parse(hdr + "\r\n" + body);
+    auto second = middleware.evaluate(crlf_ast);
+    CHECK(!second.authorized);
+    CHECK_CONTAINS(second.error_message, "replay_detected");
+
+    std::cout << "[PASS] test_crlf_header_does_not_leak_carriage_return\n";
+}
+
+// canonical_for_chk()/stamp_chk() search for the CHK marker; unanchored, a body
+// occurrence relocated the digest's blind spot into the body, where the bytes to
+// the next whitespace could be altered on both sides without changing the hash.
+void test_chk_marker_is_anchored_to_the_header() {
+    // No header CHK, marker in the body. stamp_chk must decline rather than
+    // write a digest into a statement.
+    const std::string bodymarker =
+        "VER:LLM-TOPv1 AGT:planner UID:anon TIM:2026-07-18 REQID:req_anch\n"
+        "[CODER] act:read GL:CHK:sha256:deadbeef\n";
+    CHECK(stamp_chk(bodymarker) == bodymarker);
+
+    // ...and the canonical form is the frame untouched, so those bytes are
+    // inside the digest rather than excluded from it.
+    CHECK(canonical_for_chk(bodymarker) == bodymarker);
+
+    // Two frames differing ONLY in that body region must now digest differently.
+    std::string tampered = bodymarker;
+    tampered.replace(tampered.find("deadbeef"), 8, "cafef00d");
+    CHECK(compute_chk(bodymarker) != compute_chk(tampered));
+
+    // A header CHK still works, and a body occurrence does not shadow it.
+    const std::string both =
+        "VER:LLM-TOPv1 CHK:sha256:0000 AGT:planner UID:anon TIM:2026-07-18 REQID:req_anch2\n"
+        "[CODER] act:read GL:CHK:sha256:deadbeef\n";
+    std::string stamped = stamp_chk(both);
+    CHECK(stamped.find("CHK:sha256:deadbeef") != std::string::npos);  // body untouched
+    LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+    AST ast = parser.parse(stamped);
+    CHECK(ast.header.chk == compute_chk(stamped));
+
+    std::cout << "[PASS] test_chk_marker_is_anchored_to_the_header\n";
+}
+
+// JWT claims arrive as JSON strings; the decoder used to drop backslashes and
+// keep the next byte, so "\n" became 'n' and "A" became "u0041".
+void test_claim_json_escapes_are_translated() {
+    auto validator = std::make_shared<SimpleJWTValidator>(TEST_SECRET);
+
+    CHECK(SimpleJWTValidator::extract_string_claim(R"({"s":"a\nb"})", "s") == "a\nb");
+    CHECK(SimpleJWTValidator::extract_string_claim(R"({"s":"a\tb"})", "s") == "a\tb");
+    CHECK(SimpleJWTValidator::extract_string_claim(R"({"s":"a\rb"})", "s") == "a\rb");
+    CHECK(SimpleJWTValidator::extract_string_claim(R"({"s":"a\\b"})", "s") == "a\\b");
+    CHECK(SimpleJWTValidator::extract_string_claim(R"({"s":"a\"b"})", "s") == "a\"b");
+
+    // The escape that actually shows up: encoders emit \/ freely in paths, and
+    // a scope compared byte-for-byte has to survive it.
+    CHECK(SimpleJWTValidator::extract_string_claim(R"({"s":"read:src\/**"})", "s") == "read:src/**");
+
+    // \uXXXX -> UTF-8, the form neither decoder handled.
+    CHECK(SimpleJWTValidator::extract_string_claim(R"({"s":"A"})", "s") == "A");
+    CHECK(SimpleJWTValidator::extract_string_claim(R"({"s":"é"})", "s") == "\xc3\xa9");
+    CHECK(SimpleJWTValidator::extract_string_claim(R"({"s":"€"})", "s") == "\xe2\x82\xac");
+
+    // Unpaired surrogate becomes U+FFFD rather than invalid UTF-8.
+    CHECK(SimpleJWTValidator::extract_string_claim(R"({"s":"\ud800"})", "s") == "\xef\xbf\xbd");
+
+    // Not a JSON escape: keep both bytes rather than invent a translation.
+    CHECK(SimpleJWTValidator::extract_string_claim(R"({"s":"a\qb"})", "s") == "a\\qb");
+
+    // Malformed \u is left literal, not silently swallowed.
+    CHECK(SimpleJWTValidator::extract_string_claim(R"({"s":"\uZZZZ"})", "s") == "\\uZZZZ");
+
+    // A scope carrying an escaped '/' must still authorize the plain resource.
+    std::string cap = validator->create_token("planner", "execute:read:src/main.cpp", 9999999999LL);
+    LLMTOPParser parser(LLMTOPParser::Mode::STRICT);
+    AST ast = parser.parse(stamp_chk(
+        "VER:LLM-TOPv1 CHK:sha256:abcd AGT:planner UID:anon TIM:2026-07-18 REQID:req_esc_j FALLBACK:json\n"
+        "!read[path=src/main.cpp;cap=" + cap + "]\n"));
+    LLMTOPMiddleware middleware(validator);
+    CHECK(middleware.evaluate(ast).authorized);
+
+    std::cout << "[PASS] test_claim_json_escapes_are_translated\n";
 }
 
 // P8: finalize() mutates the hash state, so an unguarded second call used to
@@ -912,6 +1075,9 @@ int main() {
     test_inband_ttl_is_not_a_control();
     test_plan_carries_sanitized_arguments();
     test_escaping_paths_are_refused();
+    test_crlf_header_does_not_leak_carriage_return();
+    test_chk_marker_is_anchored_to_the_header();
+    test_claim_json_escapes_are_translated();
     test_sha256_finalize_is_idempotent();
     test_create_token_no_json_injection();
     test_tool_arg_binding();

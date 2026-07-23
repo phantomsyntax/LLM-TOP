@@ -275,6 +275,15 @@ private:
 
     // Decode a varint
     uint32_t decode_varint(const std::vector<uint8_t>& buffer, size_t& pos) {
+        // A varint is at minimum one byte, so starting at EOF is truncation, not
+        // a zero. Without this the loop below fell straight through and returned
+        // 0: decode_string() then read a zero-length string and SUCCEEDED, and
+        // decode_kvpair() did it twice, so a payload truncated right after an
+        // opcode decoded to empty fields instead of raising. Every other
+        // underflow in this decoder throws; this one degraded silently.
+        if (pos >= buffer.size()) {
+            throw std::runtime_error("Buffer underflow reading varint");
+        }
         uint64_t value = 0; // accumulate in 64 bits so a 5th byte cannot silently overflow
         int shift = 0;
         int bytes_read = 0;

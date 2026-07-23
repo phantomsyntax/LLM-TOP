@@ -255,6 +255,63 @@ int main() {
         std::cout << "Result: PASS (Successfully rejected overflowing varint)\n\n";
     }
 
+    // Test 9: a payload truncated right after an opcode must throw, not decode
+    // to an empty field. decode_varint() used to start its loop at EOF, exit
+    // immediately with nothing read, and return 0 -- so decode_string() read a
+    // zero-length string and reported success. Every other underflow in this
+    // decoder throws; this one degraded silently, which is the worse failure for
+    // a format whose whole job is detecting truncation.
+    {
+        std::cout << "[TEST 9] Truncation right after an opcode is rejected\n";
+        BinaryEncoder encoder;
+
+        auto expect_throw = [&](const char* what, std::vector<uint8_t> buf) {
+            size_t pos = 0;
+            bool caught = false;
+            try { encoder.decode_statement(buf, pos); }
+            catch (const std::runtime_error&) { caught = true; }
+            if (!caught) std::cout << "  FAILED to reject: " << what << "\n";
+            CHECK(caught);
+        };
+
+        // Opcode is the final byte: the length varint is simply not there.
+        expect_throw("bare OP_ROLE",
+                     {static_cast<uint8_t>(BinaryEncoder::Opcode::OP_ROLE)});
+        expect_throw("bare OP_GOAL",
+                     {static_cast<uint8_t>(BinaryEncoder::Opcode::OP_GOAL)});
+        expect_throw("bare OP_TOOL_NAME",
+                     {static_cast<uint8_t>(BinaryEncoder::Opcode::OP_TOOL_NAME)});
+
+        // decode_kvpair() reads TWO varints, so it has the same hole twice:
+        // once before the key length and once before the value length.
+        expect_throw("OP_KV with no key length",
+                     {static_cast<uint8_t>(BinaryEncoder::Opcode::OP_KV)});
+        expect_throw("OP_KV truncated before the value length",
+                     {static_cast<uint8_t>(BinaryEncoder::Opcode::OP_KV),
+                      0x03, 'a', 'c', 't'});
+
+        // Same for a tool argument, which reaches decode_kvpair by another path.
+        expect_throw("OP_TOOL_ARG truncated before the value length",
+                     {static_cast<uint8_t>(BinaryEncoder::Opcode::OP_TOOL_NAME),
+                      0x04, 'r', 'e', 'a', 'd',
+                      static_cast<uint8_t>(BinaryEncoder::Opcode::OP_TOOL_ARG),
+                      0x04, 'p', 'a', 't', 'h'});
+
+        // The truncation must be caught rather than papered over: an intact
+        // encoding of the same shape still round-trips.
+        {
+            ordered_map kv;
+            kv["GL"] = "fix_leak";
+            auto good = encoder.encode_statement("CODER", kv);
+            size_t pos = 0;
+            Statement decoded = encoder.decode_statement(good, pos);
+            CHECK_EQ(decoded.role, "CODER");
+            CHECK_EQ(decoded.kvpairs.at("GL"), "fix_leak");
+        }
+
+        std::cout << "Result: PASS (truncated varints now raise)\n\n";
+    }
+
     std::cout << "All binary encoder tests passed!\n";
     return TEST_SUMMARY("binary_tests");
 }

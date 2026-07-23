@@ -26,6 +26,17 @@ parser does, not what it was once imagined to do.
 <fallback_type> ::= "json" | "none"
 <bit> ::= "0" | "1"
 
+(* Header continuation. The production above is the canonical form and the only
+   shape a producer should emit. On INPUT the parser additionally folds leading
+   bare KEY:VALUE lines into the header line, so a model that puts each field on
+   its own line is accepted rather than rejected -- observed from
+   mistral-large-3, whose output was otherwise field-perfect. Folding stops at
+   the first line that is not a header continuation. *)
+
+<header_input> ::= <header_field_line> { <newline> <header_continuation> }
+<header_continuation> ::= <header_key> ":" <string>
+<header_key> ::= "VER" | "CHK" | "AGT" | "UID" | "TIM" | "REQID" | "FALLBACK" | "HR"
+
 <body> ::= <statement> <newline>
 <statement> ::= <role_stmt> | <tool_stmt> | <kv_stmt>
 
