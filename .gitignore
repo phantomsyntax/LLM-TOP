@@ -31,6 +31,5 @@ x64/
 # Out-of-source builds
 build*/
 
-# Local mock tests
-MockProject/
-
+# Generated eval outputs (regenerable, not source)
+compliance_results*.csv
